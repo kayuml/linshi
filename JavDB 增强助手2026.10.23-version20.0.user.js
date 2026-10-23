@@ -1351,21 +1351,30 @@
             }
             .jhs-dialog-close:hover { background: #e74c3c; color: #fff; border-color: #e74c3c; }
             .jhs-dialog-frame { flex: 1 1 auto; width: 100%; border: 0; background: #fff; }
+        `;
+        document.head.appendChild(style);
+    }
 
-            /* 封面快捷按钮：样式完全对齐 JAV-JHS CoverButtonPlugin（.tool-box span 默认 opacity .3，悬停 1） */
+    // 封面快捷按钮样式：独立注入并置于 <head> 最末尾。
+    // 此前这些规则与弹窗样式合并在同一个 style 里，且只在第一次点击封面弹窗时才注入——
+    // 刷新后从未调用 injectDialogStyles()，导致暗色主题下 svg path 覆盖规则缺失，
+    // 按钮颜色停留在浏览器默认解析的内联 fill（即浅色主题配色）。
+    function injectCoverButtonStyles() {
+        if (document.getElementById('jhs-cover-btn-style')) return;
+        const style = document.createElement('style');
+        style.id = 'jhs-cover-btn-style';
+        style.textContent = `
+            /* 封面快捷按钮：样式对齐 JAV-JHS CoverButtonPlugin（.tool-box span 默认 opacity .3，悬停 1） */
             .box .tags { justify-content: space-between; }
             .jhs-tool-box { flex: 0 0 auto !important; justify-content: flex-end; align-items: center; }
             .jhs-tool-box span{ opacity:.3 }
             .jhs-tool-box span:hover{ opacity:1 }
             .jhs-tool-box .jhs-icon { width: 1.5rem; height: 1.5rem; }
-            .jhs-tool-box svg path { fill: blue; }
+            /* 注意：两条 svg path 规则的特异性必须一致（均为 [data-theme] + 4 类/元素），
+               若暗色规则写成 html[data-theme] 而亮色写 [data-theme]，亮色特异性更高会反胜——
+               这正是此前"暗色主题下按钮仍是浅色配色"的根因之一 */
             [data-theme="dark"] .jhs-tool-box svg path { fill: white; }
-            /* 长缩略图加载中/失败状态不响应点击，避免打开空 lightbox */
-            .screen-container.no-click { cursor: default; pointer-events: none; }
-            .screen-container.no-click a { pointer-events: auto; }
-            /* 详情页画质切换/工具条统一样式（对齐 JAV-JHS PreviewVideoPlugin） */
-            #video-bottom-toolbar .video-control-btn { min-width:120px; padding: 7px 12px; font-size: 12px; background: rgba(0,0,0,0.7); color: white; border: none; border-radius: 4px; cursor: pointer; }
-            #video-bottom-toolbar .video-control-btn.active { background-color: #1890ff; color: white; font-weight: bold; border: 2px solid #096dd9; }
+            .jhs-tool-box svg path { fill: blue; }
         `;
         document.head.appendChild(style);
     }
@@ -1722,7 +1731,7 @@
         setTimeout(() => t.remove(), 3000);
     }
 
- // 全屏图片查看器
+ // 全屏图片查看器（长缩略图）：鼠标始终为抓手，可按住自由拖动图片查看
     function showImageViewer(imgUrlOrEl) {
         const imgUrl = typeof imgUrlOrEl === 'string'
             ? imgUrlOrEl
@@ -1739,13 +1748,15 @@
                 <button data-act="reset" title="重置">↺</button>
                 <button data-act="close" title="关闭 (Esc)">×</button>
             </div>
-            <div class="jhs-lightbox-stage"><img src="${imgUrl}" alt="长缩略图"></div>
+            <div class="jhs-lightbox-stage"><img src="${imgUrl}" alt="长缩略图" draggable="false"></div>
         `;
         document.head.insertAdjacentHTML('beforeend', `<style>
+            /* 抓手光标覆盖整个查看器区域（背景/舞台/图片），鼠标任何位置都显示抓手 */
+            #jhs-lightbox, #jhs-lightbox .jhs-lightbox-stage, #jhs-lightbox .jhs-lightbox-stage img { cursor: grab; }
+            #jhs-lightbox.jhs-dragging, #jhs-lightbox.jhs-dragging * { cursor: grabbing !important; user-select: none; }
             #jhs-lightbox { position: fixed; inset: 0; z-index: 2147483645; background: rgba(0,0,0,0.92); overflow: auto; }
             #jhs-lightbox .jhs-lightbox-stage { min-height: 100%; display: flex; align-items: center; justify-content: center; padding: 20px; box-sizing: border-box; }
-            #jhs-lightbox .jhs-lightbox-stage img { max-width: none; width: auto; height: auto; cursor: grab; }
-            #jhs-lightbox.jhs-dragging, #jhs-lightbox.jhs-dragging * { cursor: grabbing !important; user-select: none; }
+            #jhs-lightbox .jhs-lightbox-stage img { max-width: none; width: auto; height: auto; -webkit-user-drag: none; }
             #jhs-lightbox .jhs-lightbox-toolbar { position: fixed; top: 10px; right: 16px; z-index: 1; display: flex; gap: 8px; }
             #jhs-lightbox .jhs-lightbox-toolbar button { width: 34px; height: 34px; border: 1px solid #666; border-radius: 6px;
                 background: rgba(40,40,40,0.85); color: #eee; font-size: 17px; cursor: pointer; }
@@ -1756,14 +1767,11 @@
         document.body.style.overflow = 'hidden';
         const img = box.querySelector('img');
         let scale = 1;
-        // 光标：默认抓手（可拖动查看），放大模式下为 zoom-in，缩小回适配后恢复抓手
-        const setCursor = () => { img.style.cursor = scale < 0.999 ? 'zoom-in' : 'grab'; };
         // 直接以宽高渲染（transform:scale 不改变布局盒，缩放后可滚动区域与视觉错位，会导致画面"整体偏上"）
         const setScale = (v) => {
             scale = Math.min(Math.max(v, 0.1), 8);
             img.style.width = Math.round((img.naturalWidth || window.innerWidth) * scale) + 'px';
             img.style.height = Math.round((img.naturalHeight || window.innerHeight) * scale) + 'px';
-            setCursor();
         };
         // 初始适配：按 90% 视口等比缩小；小图保持原始高清尺寸并由容器居中；打开时滚动位置置顶
         const fitImage = () => {
@@ -1781,9 +1789,6 @@
         };
         const onKey = (e) => { if (e.key === 'Escape') close(); };
         document.addEventListener('keydown', onKey);
-        box.addEventListener('click', (e) => {
-            if (e.target === box || e.target.classList.contains('jhs-lightbox-stage')) close();
-        });
         box.querySelector('.jhs-lightbox-toolbar').addEventListener('click', (e) => {
             const act = e.target.getAttribute('data-act');
             if (!act) return;
@@ -1792,28 +1797,57 @@
             if (act === 'reset')    fitImage();
             if (act === 'close')    close();
         });
-        img.addEventListener('wheel', (e) => {
+        // 滚轮缩放：在查看器任意位置都生效（不再只绑定在 img 上）
+        box.addEventListener('wheel', (e) => {
             e.preventDefault();
             setScale(scale * (e.deltaY < 0 ? 1.1 : 0.9));
         }, { passive: false });
 
-        // 抓手拖动查看：按下后按位移滚动 lightbox 容器（长缩略图放大后可上下拖动）
+        // 自由拖动查看：在整个查看器区域按下即可拖拽（图片/背景/舞台均可），横纵双向跟随位移；
+        // 移动超过阈值视为拖拽，随后不再触发"点击空白关闭"，避免拖动松手误关
         let dragState = null;
-        img.addEventListener('mousedown', (e) => {
+        let dragged = false;
+        box.addEventListener('mousedown', (e) => {
             if (e.button !== 0) return;
+            if (e.target.closest && e.target.closest('.jhs-lightbox-toolbar')) return; // 工具条按钮不参与拖拽
             e.preventDefault();
             dragState = { x: e.clientX, y: e.clientY, sl: box.scrollLeft, st: box.scrollTop };
+            dragged = false;
             box.classList.add('jhs-dragging');
         });
         window.addEventListener('mousemove', (e) => {
             if (!dragState) return;
-            box.scrollLeft = dragState.sl - (e.clientX - dragState.x);
-            box.scrollTop = dragState.st - (e.clientY - dragState.y);
+            const dx = e.clientX - dragState.x, dy = e.clientY - dragState.y;
+            if (Math.abs(dx) > 3 || Math.abs(dy) > 3) dragged = true;
+            box.scrollLeft = dragState.sl - dx;
+            box.scrollTop = dragState.st - dy;
         });
         window.addEventListener('mouseup', () => {
             dragState = null;
             box.classList.remove('jhs-dragging');
         });
+        // 点击空白背景关闭（拖拽后不关闭）
+        box.addEventListener('click', (e) => {
+            if (dragged) { dragged = false; return; }
+            if (e.target === box || e.target.classList.contains('jhs-lightbox-stage')) close();
+        });
+
+        // 触屏：单指拖动查看
+        let touchState = null;
+        box.addEventListener('touchstart', (e) => {
+            if (e.touches.length !== 1) return;
+            if (e.target.closest && e.target.closest('.jhs-lightbox-toolbar')) return;
+            const t = e.touches[0];
+            touchState = { x: t.clientX, y: t.clientY, sl: box.scrollLeft, st: box.scrollTop };
+        }, { passive: true });
+        box.addEventListener('touchmove', (e) => {
+            if (!touchState || e.touches.length !== 1) return;
+            const t = e.touches[0];
+            box.scrollLeft = touchState.sl - (t.clientX - touchState.x);
+            box.scrollTop = touchState.st - (t.clientY - touchState.y);
+            e.preventDefault();
+        }, { passive: false });
+        box.addEventListener('touchend', () => { touchState = null; });
     }
 
  // ---------- 长缩略图 ----------
@@ -2154,7 +2188,24 @@
         const map = videoEl && videoEl._jhsDmmMap;
         if (!map) return;
         if (videoEl.offsetParent === null) return; // 播放器未真正可见时不渲染
+        injectVideoToolbarStyles();
         bindQualityButtons(videoEl, map, videoEl._jhsDefaultQuality);
+    }
+
+    // 画质切换/工具条统一样式 + 长缩略图状态样式：独立注入（对齐 JAV-JHS mainCss 全局注入方式，
+    // 保证首次进入详情页、未经过弹窗流程时按钮样式也完整生效）
+    function injectVideoToolbarStyles() {
+        if (document.getElementById('jhs-video-toolbar-style')) return;
+        const style = document.createElement('style');
+        style.id = 'jhs-video-toolbar-style';
+        style.textContent = `
+            /* 长缩略图加载中/失败状态不响应点击，避免打开空 lightbox */
+            .screen-container.no-click { cursor: default; pointer-events: none; }
+            .screen-container.no-click a { pointer-events: auto; }
+            #video-bottom-toolbar .video-control-btn { min-width:120px; padding: 7px 12px; font-size: 12px; background: rgba(0,0,0,0.7); color: white; border: none; border-radius: 4px; cursor: pointer; }
+            #video-bottom-toolbar .video-control-btn.active { background-color: #1890ff; color: white; font-weight: bold; border: 2px solid #096dd9; }
+        `;
+        document.head.appendChild(style);
     }
 
  // 在 video 所在容器底部渲染画质切换按钮组（工具条只跟随视频播放器，绝不插入图片预览网格）
@@ -2226,6 +2277,10 @@
     // 样式对齐 CoverButtonPlugin：.tool-box span 默认 opacity .3，悬停变 1；SVG 路径蓝色/暗色白色
     function addCoverQuickButtons() {
         if (!config.enableScreenSvg && !config.enableVideoSvg) return;
+        // 关键修复：样式必须在创建按钮前注入（且独立于弹窗样式）。
+        // 此前 svg 内联 fill="#4078FD"（浅色主题配色）+ 覆盖 CSS 只在第一次弹窗时才注入，
+        // 导致刷新后暗色主题下按钮仍是浅色配色；同时剥离内联 fill，让 CSS 完全接管颜色。
+        injectCoverButtonStyles();
         document.querySelectorAll('.movie-list .item').forEach(item => {
             if (item.querySelector('.jhs-tool-box')) return; // 幂等
             const tagsRow = item.querySelector('.tags');
@@ -2266,11 +2321,13 @@
             if (!btn) return;
             e.preventDefault();
             e.stopPropagation();
+            if (bindCoverQuickButtonEvents._screenLoading) return; // 防连点重复请求
             const item = btn.closest('.movie-list .item');
             if (!item) return;
             let code = extractItemCode(item);
             if (!code) return;
             code = code.replace('FC2-', '');
+            bindCoverQuickButtonEvents._screenLoading = true;
             const prevHtml = btn.innerHTML;
             btn.style.opacity = '1';
             btn.title = '加载中...';
@@ -2280,6 +2337,7 @@
             } catch (err) {
                 jhsToast('长缩略图获取失败: ' + (err.message || err));
             } finally {
+                bindCoverQuickButtonEvents._screenLoading = false;
                 btn.style.opacity = '';
                 btn.title = '长缩略图';
                 btn.innerHTML = prevHtml;
@@ -2311,6 +2369,7 @@
 
             const code = extractItemCode(item);
             if (!code) return;
+            if (bindCoverQuickButtonEvents._videoLoading && bindCoverQuickButtonEvents._videoLoading === code) return; // 同番号防连点
             const img = item.querySelector('.cover img');
             if (!img) { jhsToast('没有找到封面图片'); return; }
             const videoId = `${code}_preview_video`;
@@ -2339,9 +2398,15 @@
                 return;
             }
 
+            bindCoverQuickButtonEvents._videoLoading = code;
             btn.title = '解析中...';
             const poster = img.currentSrc || img.src;
-            const dmmVideoMap = await getDmmVideo(code);
+            let dmmVideoMap = null;
+            try {
+                dmmVideoMap = await getDmmVideo(code);
+            } finally {
+                bindCoverQuickButtonEvents._videoLoading = null;
+            }
             if (!dmmVideoMap) {
                 jhsToast('未解析到视频');
                 btn.title = '播放预览视频';
@@ -2355,13 +2420,17 @@
                 if (getComputedStyle(cover).position === 'static') cover.style.position = 'relative';
                 const wrap = document.createElement('div');
                 wrap.style.cssText = 'display:flex;justify-content:center;align-items:center;position:absolute;top:0;left:0;height:100%;width:100%;z-index:10;overflow:hidden;background:#000;';
+                // 关键修复：HTML 属性不写 muted——此前带 muted 属性时，Chromium 系浏览器会把
+                // "静音"作为该次用户手势的媒体策略锁存下来，即使 JS 随后设置 muted=false
+                // 且 play() 成功，实际输出仍是无声——这正是"依旧默认禁音"的根因。
+                // 改为无 muted 属性创建 + JS 同步解除静音（在点击手势调用栈内完成）。
                 wrap.innerHTML = `<video src="${videoUrl}" poster="${poster}" id="${videoId}" controls loop playsinline
                     style="max-height:100%;max-width:100%;object-fit:contain"></video>`;
                 cover.appendChild(wrap);
                 const v = wrap.querySelector('video');
                 v.load();
                 applyJhsMutedPreference(v); // 默认有声（跟随记忆偏好），对齐 JAV-JHS showVideo: videoElement.muted = !1
-                v.play().catch(() => { v.muted = true; v.play().catch(() => {}); });
+                v.play().catch(() => {});   // 若被浏览器自动播放策略拦截则保持暂停，由用户手动点播放
                 img.style.display = 'none';
                 btn.innerHTML = COVER_RECOVERY_VIDEO_SVG;
                 btn.title = '切回封面';
