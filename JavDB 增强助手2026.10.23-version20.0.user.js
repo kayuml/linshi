@@ -2024,6 +2024,18 @@
         return null;
     }
 
+    // 与 JAV-JHS _searchContentIds 一致：找到 Content ID 后顺带把"多结果"标记写入缓存，供封面按钮解析时参考
+    function saveDmmSiteCache(carNum, items) {
+        try {
+            const dmmCacheKey = 'jhs_other_site_dmm';
+            const dmmCacheData = localStorage.getItem(dmmCacheKey) ? JSON.parse(localStorage.getItem(dmmCacheKey)) : {};
+            let url = `https://www.dmm.co.jp/search/=/searchstr=${carNum}`, type = 'single';
+            if (items.length > 1) { type = 'multiple'; } else { url = items[0].pageUrl; }
+            dmmCacheData[carNum.toUpperCase()] = { type: type, url: url };
+            localStorage.setItem(dmmCacheKey, JSON.stringify(dmmCacheData));
+        } catch (e) {}
+    }
+
     async function dmmExtractTrailerLinks({ contentId, serviceCode, floorCode }) {
         const trailerPageUrl = `https://www.dmm.co.jp/service/digitalapi/-/html5_player/=/cid=${contentId}/mtype=AhRVShI_/service=${serviceCode}/floor=${floorCode}/mode=/`;
         const htmlContent = await gmHttpGet(trailerPageUrl, {
@@ -2055,7 +2067,7 @@
         return finalQualityMap;
     }
 
-    async function getDmmVideo(carNum, allowRetry = true) {
+    async function getDmmVideo(carNum) {
         if (!carNum) return null;
         carNum = carNum.toUpperCase();
         let cacheData = {};
@@ -2075,13 +2087,13 @@
                 return null;
             }
             if (!contentItems || contentItems.length === 0) {
-                // 关键修复（对齐 JAV-JHS httpManager：默认超时 5s、重试 3 次）：
-                // DMM Affiliate API 偶发返回空结果/瞬时失败，此前 gmHttpGet 只重试 1 次且超时 15s，
-                // 导致首次进入详情页要等很久甚至"未解析到视频"。此处对"完全查不到"自动再重试一轮。
-                if (allowRetry) return getDmmVideo(carNum, false);
+                // DMM Affiliate API 偶发瞬时失败返回空结果（JAV-JHS 靠 3 次快速重试消化这种抖动）。
+                // 自研的整链二轮重试会把 3 组关键词 × 3 次请求全部跑满，首次进详情页要等很久——已删除。
                 return null;
             }
+            saveDmmSiteCache(carNum, contentItems);
             try {
+                // 与 JAV-JHS fetchVideo 一致：两个候选 contentId 并行竞速解析，取最先成功者
                 const finalVideoMap = await Promise.any(contentItems.map(item => dmmExtractTrailerLinks(item)));
                 cacheData[carNum] = finalVideoMap;
                 localStorage.setItem(DMM_VIDEO_CACHE_KEY, JSON.stringify(cacheData));
@@ -2117,30 +2129,31 @@
 
             const videoEl = document.querySelector('#preview-video');
             if (videoEl) {
-                // 原生播放器存在（隐藏或显示）：仅静默替换 src，不自动播放、不弹工具条——
-                // 对齐 JAV-JHS initDmm：工具条由用户点击"预告片"打开播放器后（handleVideo）才出现，
-                // 避免画质切换/工具条错误地出现在图像预览旁
-                const wasVisible = videoEl.offsetParent !== null && !videoEl.paused;
-                const currentTime = videoEl.currentTime || 0;
-                // 关键修复：src 相同则跳过 load()——此前每次增强都无条件 setAttribute+load()，
-                // 已缓冲的视频被强制重新拉流，正是"加载卡顿/反复缓冲"的根因之一
-                const sameSrc = (videoEl.getAttribute('src') === defaultVideoUrl) ||
-                    (videoEl.currentSrc && videoEl.currentSrc === defaultVideoUrl);
-                if (!sameSrc) {
-                    videoEl.setAttribute('src', defaultVideoUrl);
-                    if (wasVisible) {
-                        try { videoEl.load(); videoEl.currentTime = currentTime; videoEl.play().catch(() => {}); } catch (e) {}
-                    }
+                // 与 JAV-JHS initDmm 逐行一致：只要原生播放器存在（无论可见与否）就换源 + load()；
+                // 仅在"未隐藏"时额外恢复进度并 play。此前加了 sameSrc 跳过和 wasVisible 条件，
+                // 导致增强完成前用户已点开播放器的场景下 src 迟迟不被替换——这正是
+                // "切换画质后按钮高亮变了、实际播放的仍是一开始加载的画质"的根因之一
+                // （懒钩子路径拿到的是旧 map/旧默认源，与静默增强写入的工具条数据不一致）。
+                const currentTime = videoEl.currentTime;
+                videoEl.setAttribute('src', defaultVideoUrl);
+                const isHidden = videoEl.offsetParent === null || getComputedStyle(videoEl).display === 'none';
+                if (!isHidden) {
+                    videoEl.load();
+                    videoEl.currentTime = currentTime;
+                    videoEl.play().catch(() => {});
                 }
                 videoEl.dataset.jhsEnhanced = '1';
                 videoEl._jhsDmmMap = dmmVideoMap;
                 videoEl._jhsDefaultQuality = defaultQuality;
-                // 关键修复：播放器已可见时立即渲染画质工具条——此前只有懒钩子会挂工具条，
-                // 若用户先打开原生播放器、异步增强才完成，会出现"有视频但切不了画质"（表现为切换无效）
+                // 播放器已可见时（用户在异步增强完成前就点开了预告片）：先移除可能已由懒钩子
+                // 用旧数据渲染的工具条，再按最新 map 重挂——保证按钮 data-video-src 与当前源一致，
+                // 杜绝"高亮变了但实际播放的仍是一开始加载的画质"
                 if (videoEl.offsetParent !== null) {
                     // 与 JAV-JHS handleVideo 一致：播放器打开状态下应用静音偏好并继续播放
                     applyJhsMutedPreference(videoEl);
                     videoEl.play().catch(() => {});
+                    const staleToolbar = document.querySelector('#video-bottom-toolbar');
+                    if (staleToolbar) staleToolbar.remove();
                     showPreviewToolbar(videoEl);
                 }
             } else {
@@ -2237,11 +2250,16 @@
                 videoEl._jhsDmmMap = dmmVideoMap;
                 videoEl._jhsDefaultQuality = defaultQuality;
                 applyJhsMutedPreference(videoEl);
+                // 与 JAV-JHS handleVideo 逐行一致：src 不同才换源+load()+play()；
+                // 若静默增强已把 src 换成同一默认地址，这里不再重复 load()——
+                // 此前无条件 load() 会把刚缓冲好的视频强制重新拉流（加载卡顿的根因之一），
+                // 且重挂工具条前移除旧工具条，保证按钮数据始终来自最新 map
                 if (videoEl.getAttribute('src') !== defaultVideoUrl) {
-                    const t = videoEl.currentTime || 0;
                     videoEl.setAttribute('src', defaultVideoUrl);
-                    try { videoEl.load(); videoEl.currentTime = t; } catch (err) {}
+                    videoEl.load();
                 }
+                const staleToolbar = document.querySelector('#video-bottom-toolbar');
+                if (staleToolbar) staleToolbar.remove();
                 videoEl.play().catch(() => {});
                 showPreviewToolbar(videoEl);
             }, 300);
@@ -2293,6 +2311,8 @@
             parent = wrap;
         }
         if (parent.querySelector(':scope > #video-bottom-toolbar')) return; // 幂等
+        const staleToolbar = document.querySelector('#video-bottom-toolbar');
+        if (staleToolbar) staleToolbar.remove(); // 清理挂在其它节点上的旧工具条，杜绝双工具条/旧数据按钮
         parent.style.position = 'relative';
         const toolbar = document.createElement('div');
         toolbar.id = 'video-bottom-toolbar';
