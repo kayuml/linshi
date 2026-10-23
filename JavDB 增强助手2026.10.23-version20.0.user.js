@@ -2192,6 +2192,7 @@
     function applyJhsMutedPreference(videoEl) {
         const pref = localStorage.getItem('jhs_videoMuted');
         videoEl.muted = pref ? ('yes' === pref) : false;
+        if (!videoEl.muted && !videoEl.volume) videoEl.volume = 1; // 防止 volume=0 导致"解除禁音仍无声"
         if (!videoEl._jhsVolumeBound) {
             videoEl._jhsVolumeBound = true;
             videoEl.addEventListener('volumechange', () => {
