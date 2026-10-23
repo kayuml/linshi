@@ -2127,7 +2127,15 @@
             const defaultVideoUrl = dmmVideoMap[defaultQuality];
             if (!defaultVideoUrl) return;
 
-            const videoEl = document.querySelector('#preview-video');
+            // 【修复切换画质抓包看不到目标地址·根因】JavDB 详情页预告片播放器经 fancybox
+            // 模态层打开时，DOM 中会同时存在多个 id="preview-video" 的节点（页面隐藏的原生
+            // 节点 + .fancybox-content 内真正在播的节点）。document.querySelector 永远返回
+            // DOM 顺序靠前的第一个——即页面里那个看不见的隐藏节点。此前 enhancePreviewVideo、
+            // 懒钩子、bindQualityButtons 全部用单查，换 src/load/play 都作用在隐藏节点上，
+            // fancybox 内真正播放的元素始终停留在原生默认流——这就是"高亮变了、抓包里连
+            // 720p(hmb.mp4) 请求都没有"的直接原因。现统一改用 pickJhsLiveVideo()：
+            // ①正在播放且有 src 的 → ②位于 .fancybox-content 内的 → ③已打开的 → ④第一个。
+            const videoEl = pickJhsLiveVideo();
             if (videoEl) {
                 // 【逐行对齐 JAV-JHS initDmm + 防死循环】
                 // JAV-JHS 原版是无条件 attr('src')+（可见时）play()，但它只在页面初始化执行一次；
@@ -2230,13 +2238,17 @@
             if (!window.location.pathname.startsWith('/v/')) return;
             const link = e.target.closest && e.target.closest('a[href*="#preview-video"], .preview-video-container');
             if (!link) return;
+            // 【修复切换画质抓包看不到目标地址】手势时刻记录播放意图：点击时视频正在播放，
+            // 说明这次是"暂停"手势（原生 controls/入口会自行暂停），脚本后续绝不补 play()。
+            const gestureVideo = pickJhsLiveVideo();
+            const wasPlayingAtGesture = !!(gestureVideo && !gestureVideo.paused);
             setTimeout(async () => {
-                let videoEl = document.querySelector('#preview-video');
+                let videoEl = pickJhsLiveVideo(); // 多节点场景优先 fancybox 内真正在播的元素
                 if (!videoEl) return;
                 // 【修复 cb158f5 回归：无法暂停视频】手势时刻检测播放意图：
                 // JavDB 原生预告片入口点击本身会切换播放/暂停——若此刻视频正在播放，
                 // 说明这次点击是"暂停"手势，脚本绝不能再补 play() 把它弹回播放。
-                const wasPlayingAtGesture = !videoEl.paused;
+                // （以手势时刻的判定为准，异步期间 fancybox 可能已重建节点）
                 applyJhsMutedPreference(videoEl);
                 // 【修复画质切换后播放的仍是旧画质·根因】此前这里无条件 play()：JavDB 原生预告片
                 // 入口点击本身会切换播放/暂停，若脚本把"从未被增强的原生 JavDB 预览视频"也强制
@@ -2264,7 +2276,7 @@
                 const dmmVideoMap = await getDmmVideo(code);
                 if (!dmmVideoMap) return;
                 // 异步解析期间 fancybox 可能已重建播放器节点，重新获取最新引用（对齐 JAV-JHS handleVideo 每次现查）
-                videoEl = document.querySelector('#preview-video');
+                videoEl = pickJhsLiveVideo();
                 if (!videoEl) return;
                 const defaultQuality = selectDefaultQuality(Object.keys(dmmVideoMap), config.videoQuality);
                 const defaultVideoUrl = dmmVideoMap[defaultQuality];
@@ -2311,6 +2323,20 @@
         if (!videoEl.paused || videoEl.currentTime > 0) return true;
         if (videoEl.closest && videoEl.closest('.fancybox-content')) return true;
         return videoEl.offsetParent !== null;
+    }
+
+    // 【修复切换画质抓包看不到目标地址·核心】收集所有 id="preview-video" 节点并选出
+    // "真正在播的那一个"。JavDB 详情页经 fancybox 打开预告片后，DOM 中会同时存在页面里
+    // 隐藏的 #preview-video 与 .fancybox-content 内可见的两个同 id 节点；querySelector
+    // 单查永远返回靠前的隐藏节点，导致换源/load/play 全部打在看不见的元素上（表现为
+    // 高亮变了、实际播放的仍是原画质，抓包里连目标 hmb.mp4 请求都没有）。
+    function pickJhsLiveVideo() {
+        const list = Array.from(document.querySelectorAll('#preview-video'));
+        if (!list.length) return null;
+        return list.find(v => !v.paused && v.getAttribute('src'))
+            || list.find(v => v.closest && v.closest('.fancybox-content'))
+            || list.find(v => isJhsPlayerOpened(v))
+            || list[0];
     }
     function showPreviewToolbar(videoEl) {
         const map = videoEl && videoEl._jhsDmmMap;
