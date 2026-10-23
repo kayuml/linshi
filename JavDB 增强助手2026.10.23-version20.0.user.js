@@ -2385,46 +2385,25 @@
             const btn = e.target.closest('.video-control-btn');
             if (!btn || btn.classList.contains('active')) return;
             try {
-                // 【修复画质切换无效·根因2】每次点击都现查当前真正在播的视频元素：
-                // JavDB 原生预告片经 fancybox 打开时，#preview-video 节点可能被移动甚至重建，
-                // 工具条闭包里缓存的 videoEl 引用可能已"失效"（指向隐藏/脱离文档的旧节点）——
-                // 换源操作全部打在看不见的节点上，画面自然还是原画质。对齐 JAV-JHS 的
-                // $("#preview-video") 每次现查语义。
-                let target = document.querySelector('#preview-video') || videoEl;
-                if (!target.isConnected) target = videoEl;
-                if (target !== videoEl && videoEl.isConnected) {
-                    // 若页面现存 video 与闭包 video 不同，优先选择可见/正在播放的那个
-                    const aVisible = isJhsPlayerOpened(target), bVisible = isJhsPlayerOpened(videoEl);
-                    target = (aVisible || !bVisible) ? target : videoEl;
-                }
-                // 与 JAV-JHS handleVideo 的画质切换逐行一致：记录进度 → 换 src → load() → 恢复进度 → play()
-                // （此前多了 wasPlaying 条件判断，用户暂停状态下切画质不续播，表现为"切换无效"）
-                const currentTime = target.currentTime;
-                target.setAttribute('src', btn.dataset.videoSrc);
-                target.load();
-                target.currentTime = currentTime;
-                await target.play().catch(() => {});
+                // 【逐字照搬 JAV-JHS handleVideo 的画质切换监听（源码2705-2724行）】
+                // const currentTime = videoEl.currentTime;
+                // $videoEl.attr("src", videoSrc);   ← 注意：JAV-JHS 作用于【同一个】videoEl 引用
+                // videoEl.load();
+                // videoEl.currentTime = currentTime;
+                // await videoEl.play();
+                // ——它从不重新查找元素；而我此前几版自创的"现查 #preview-video / fancybox 内
+                // 找 paused=false 的 live 元素再重放换源"逻辑是元凶：fancybox 里 video 元素
+                // 带 loop 属性，缓冲新片源期间 paused 恒为 false，导致重放分支命中并再次
+                // load()，把刚设好的目标画质反复打断回退——抓包看不到 720p 请求即由此而来。
+                // 现彻底删除该自创逻辑，严格对齐原版。
+                const currentTime = videoEl.currentTime;
+                videoEl.setAttribute('src', btn.dataset.videoSrc);
+                videoEl.load();
+                videoEl.currentTime = currentTime;
+                await videoEl.play().catch(() => {});
                 group.querySelectorAll('.video-control-btn').forEach(b => b.classList.remove('active'));
                 btn.classList.add('active');
-                target._jhsDefaultQuality = btn.dataset.quality;
                 videoEl._jhsDefaultQuality = btn.dataset.quality;
-                // 【修复画质切换后播放的仍是旧画质·根因2】换源后强制核验真实生效地址：
-                // 若 currentSrc 与目标画质 URL 不一致（常见于 DMM 同 CDN 多码率文件被浏览器
-                // 判定为同源、或 fancybox 重建节点导致 setAttribute 打在错误实例上），说明这次
-                // 点击没作用到真正在播的元素——直接对当前正在播放/可见的那个 video 元素重放一遍
-                // 换源流程（对齐 JAV-JHS 每次 $() 现查最新 DOM 的语义）。
-                if (target.currentSrc && btn.dataset.videoSrc && !target.currentSrc.endsWith(btn.dataset.videoSrc)) {
-                    const live = Array.from(document.querySelectorAll('#preview-video, .fancybox-content video, .jhs-video-wrap video'))
-                        .find(v => v && v !== target && !v.paused) || null;
-                    if (live) {
-                        const t2 = live.currentTime;
-                        live.setAttribute('src', btn.dataset.videoSrc);
-                        live.load();
-                        live.currentTime = t2;
-                        await live.play().catch(() => {});
-                        target = live;
-                    }
-                }
             } catch (err) {
                 console.error('切换画质失败:', err);
             }
