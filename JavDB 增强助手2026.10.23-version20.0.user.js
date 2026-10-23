@@ -2129,13 +2129,12 @@
 
             const videoEl = document.querySelector('#preview-video');
             if (videoEl) {
-                // 【修复 f9b1fa4 引入的页面卡死】initDmm 语义是"页面加载时的静默增强"：
-                // 无条件 setAttribute('src')+load()+play() 会在 MutationObserver 每次 DOM 变动
-                // 触发本函数时把刚缓冲好的视频强制重新拉流，形成 load→databytes buffered→DOM 变动
-                // →再 load 的死循环，表现为整页卡住——f9b1fa4 删掉 sameSrc 跳过后正是踩了这个坑。
-                // 现恢复"src 相同则跳过换源/load"的判断；同时保留 f9b1fa4 的正确修复：
-                // 换源时恢复进度并续播（解决增强完成前用户已点开播放器导致 src 迟迟不被替换、
-                // "切换画质后实际播放的仍是一开始画质"的问题），且重挂工具条前先移除旧工具条。
+                // 【逐行对齐 JAV-JHS initDmm + 防死循环】
+                // JAV-JHS 原版是无条件 attr('src')+（可见时）play()，但它只在页面初始化执行一次；
+                // 本脚本由 MutationObserver 节流反复触发 enhancePreviewVideo，若沿用"无条件换源"，
+                // 一旦 DMM API 两次解析返回不同时效的地址，就会每 800ms 强制重新拉流一次，
+                // 表现为"预览视频永远在缓冲/加载卡顿"。因此仅在地址不同时才换源+load，
+                // 其余时序（记录进度→换src→load→恢复进度→play）与 JAV-JHS handleVideo 逐行一致。
                 const curAttr = videoEl.getAttribute('src') || '';
                 const sameSrc = curAttr === defaultVideoUrl || (videoEl.currentSrc && videoEl.currentSrc === defaultVideoUrl);
                 const wasVisible = videoEl.offsetParent !== null;
@@ -2151,17 +2150,16 @@
                 videoEl.dataset.jhsEnhanced = '1';
                 videoEl._jhsDmmMap = dmmVideoMap;
                 videoEl._jhsDefaultQuality = defaultQuality;
-                // 播放器已可见时（用户在异步增强完成前就点开了预告片）：先移除可能已由懒钩子
-                // 用旧数据渲染的工具条，再按最新 map 重挂——保证按钮 data-video-src 与当前源一致，
-                // 杜绝"高亮变了但实际播放的仍是一开始加载的画质"
-                if (wasVisible) {
-                    // 【修复 cb158f5 回归】上一版这里无条件 play()，导致用户刚点暂停就被静默
-                    // 增强（800ms 节流轮询）强制恢复播放——表现为"无法暂停视频"。现改为尊重
-                    // 用户播放意图：paused 时不 play；仅当用户此前处于播放状态才续播。
+                // 播放器已可见时（用户在异步增强完成前就点开了预告片）：补挂/复用工具条。
+                // 【修复画质按钮点了没反应】关键根因：JavDB 原生详情页【没有】#preview-video，
+                // 点击"预告片"入口后 fancybox 会把隐藏的视频节点搬进 .fancybox-content 模态层，
+                // 而此前 bindQualityButtons 用 offsetParent===null 判断"可见"——被搬走的节点在
+                // fancybox 动画期间 offsetParent 为 null，工具条永远渲染不出来（或渲染在看不见的
+                // 原位置），表现就是"无法切换画质/按钮无反应"。现对齐 JAV-JHS：只要视频处于播放
+                // 状态即视为播放器已打开，并把工具条挂到视频所在容器（.fancybox-content）内。
+                if (wasVisible || !videoEl.paused) {
                     applyJhsMutedPreference(videoEl);
                     if (!videoEl.paused) videoEl.play().catch(() => {});
-                    const staleToolbar = document.querySelector('#video-bottom-toolbar');
-                    if (staleToolbar) staleToolbar.remove();
                     showPreviewToolbar(videoEl);
                 }
             } else {
@@ -2243,7 +2241,7 @@
                 if (!wasPlayingAtGesture) videoEl.play().catch(() => {});
                 if (videoEl.dataset.jhsEnhanced === '1') {
                     // 已增强过：播放器重新打开时补挂工具条（不再换源，保持加载速度修复）
-                    if (videoEl.offsetParent !== null) showPreviewToolbar(videoEl);
+                    if (isJhsPlayerOpened(videoEl)) showPreviewToolbar(videoEl);
                     return;
                 }
                 const code = extractDetailCode();
@@ -2252,8 +2250,8 @@
                 // 两侧先后各自渲染工具条，后一侧 remove+重建销毁了前一侧刚绑定的委托监听节点，
                 // 表现为"按钮在、点了没反应"。现加并发锁：另一侧正在解析时本路径直接跳过，
                 // 工具条统一由持有锁的一侧渲染（enhancePreviewVideo 的 finally 释放锁）。
-                if (getDmmVideo._inflight && getDmmVideo._inflight(code)) {
-                    if (videoEl.offsetParent !== null) showPreviewToolbar(videoEl);
+                if (getDmmVideo._pending && getDmmVideo._pending[code.toUpperCase()]) {
+                    if (isJhsPlayerOpened(videoEl)) showPreviewToolbar(videoEl);
                     return;
                 }
                 const dmmVideoMap = await getDmmVideo(code);
@@ -2276,20 +2274,28 @@
                     videoEl.setAttribute('src', defaultVideoUrl);
                     videoEl.load();
                 }
-                const staleToolbar = document.querySelector('#video-bottom-toolbar');
-                if (staleToolbar) staleToolbar.remove();
-                // 【修复 cb158f5 回归：无法暂停视频】手势时刻为"暂停"意图时不强制 play
+                // 【修复 cb158f5 回归】同手势意图：用户本次点击若是"暂停"手势则不强制续播
                 if (!wasPlayingAtGesture) videoEl.play().catch(() => {});
+                // 【修复画质按钮点了没反应】可见性判定改用 isJhsPlayerOpened（兼容 fancybox 模态层）
                 showPreviewToolbar(videoEl);
             }, 300);
         }, true);
     }
 
-    // 播放器可见时才渲染工具条
+    // 播放器打开后才渲染工具条。
+    // 【修复画质按钮点了没反应】"已打开"的判定不再使用 offsetParent（JavDB 原生预告片经 fancybox
+    // 把视频节点搬进模态层，动画期间 offsetParent 为 null，导致工具条永远不渲染）——对齐 JAV-JHS：
+    // 只要视频正在播放、或已位于 .fancybox-content 内、或正常可见，即视为播放器已打开。
+    function isJhsPlayerOpened(videoEl) {
+        if (!videoEl) return false;
+        if (!videoEl.paused || videoEl.currentTime > 0) return true;
+        if (videoEl.closest && videoEl.closest('.fancybox-content')) return true;
+        return videoEl.offsetParent !== null;
+    }
     function showPreviewToolbar(videoEl) {
         const map = videoEl && videoEl._jhsDmmMap;
         if (!map) return;
-        if (videoEl.offsetParent === null) return; // 播放器未真正可见时不渲染
+        if (!isJhsPlayerOpened(videoEl)) return; // 播放器未打开时不渲染
         injectVideoToolbarStyles();
         bindQualityButtons(videoEl, map, videoEl._jhsDefaultQuality);
     }
@@ -2329,7 +2335,7 @@
             videoEl.style.maxHeight = '70vh';
             parent = wrap;
         }
-        // 【修复画质按钮点击无反应】幂等策略升级：已存在工具条且其数据与当前 map/默认画质
+        // 【修复画质按钮点了没反应】幂等策略升级：已存在工具条且其数据与当前 map/默认画质
         // 一致时直接复用（监听完好、不销毁重建）；仅当数据不一致时才 remove+重建。
         // 此前"remove 旧工具条再重建"会在懒钩子/静默增强并发时销毁刚绑定的委托监听，
         // 导致按钮渲染出来了但点了没反应。
@@ -2338,8 +2344,14 @@
             if (existingToolbar.dataset.jhsQuality === (videoEl._jhsDefaultQuality || defaultQuality)) return; // 数据一致，复用
             existingToolbar.remove(); // 数据不一致才重建
         }
-        const staleToolbar = document.querySelector('#video-bottom-toolbar');
-        if (staleToolbar && staleToolbar !== existingToolbar) staleToolbar.remove(); // 清理挂在其它节点上的旧工具条
+        // 【修复画质切换无效·根因1】清理挂在【其它 video 容器】上的同名旧工具条——JavDB 原生预告片
+        // 走 fancybox 模态层，视频节点会被搬进 .fancybox-content；若此前工具条挂在页面原位置的父容器
+        // （或上一代 video 节点）上，用户看到并点击的其实是那个"游离"的旧工具条：它的闭包持有的是
+        // 页面里的隐藏 video 引用，改 src/load/play 全部作用在看不见的元素上——这就是"高亮变了、
+        // 播放的画质没变"的直接原因。
+        document.querySelectorAll('#video-bottom-toolbar').forEach(tb => {
+            if (tb !== existingToolbar && !parent.contains(tb)) tb.remove();
+        });
         parent.style.position = 'relative';
         const toolbar = document.createElement('div');
         toolbar.id = 'video-bottom-toolbar';
@@ -2366,15 +2378,28 @@
             const btn = e.target.closest('.video-control-btn');
             if (!btn || btn.classList.contains('active')) return;
             try {
+                // 【修复画质切换无效·根因2】每次点击都现查当前真正在播的视频元素：
+                // JavDB 原生预告片经 fancybox 打开时，#preview-video 节点可能被移动甚至重建，
+                // 工具条闭包里缓存的 videoEl 引用可能已"失效"（指向隐藏/脱离文档的旧节点）——
+                // 换源操作全部打在看不见的节点上，画面自然还是原画质。对齐 JAV-JHS 的
+                // $("#preview-video") 每次现查语义。
+                let target = document.querySelector('#preview-video') || videoEl;
+                if (!target.isConnected) target = videoEl;
+                if (target !== videoEl && videoEl.isConnected) {
+                    // 若页面现存 video 与闭包 video 不同，优先选择可见/正在播放的那个
+                    const aVisible = isJhsPlayerOpened(target), bVisible = isJhsPlayerOpened(videoEl);
+                    target = (aVisible || !bVisible) ? target : videoEl;
+                }
                 // 与 JAV-JHS handleVideo 的画质切换逐行一致：记录进度 → 换 src → load() → 恢复进度 → play()
                 // （此前多了 wasPlaying 条件判断，用户暂停状态下切画质不续播，表现为"切换无效"）
-                const currentTime = videoEl.currentTime;
-                videoEl.setAttribute('src', btn.dataset.videoSrc);
-                videoEl.load();
-                videoEl.currentTime = currentTime;
-                await videoEl.play().catch(() => {});
+                const currentTime = target.currentTime;
+                target.setAttribute('src', btn.dataset.videoSrc);
+                target.load();
+                target.currentTime = currentTime;
+                await target.play().catch(() => {});
                 group.querySelectorAll('.video-control-btn').forEach(b => b.classList.remove('active'));
                 btn.classList.add('active');
+                target._jhsDefaultQuality = btn.dataset.quality;
                 videoEl._jhsDefaultQuality = btn.dataset.quality;
             } catch (err) {
                 console.error('切换画质失败:', err);
