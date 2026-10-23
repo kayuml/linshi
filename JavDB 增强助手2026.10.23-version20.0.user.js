@@ -2238,8 +2238,15 @@
                 // 说明这次点击是"暂停"手势，脚本绝不能再补 play() 把它弹回播放。
                 const wasPlayingAtGesture = !videoEl.paused;
                 applyJhsMutedPreference(videoEl);
-                if (!wasPlayingAtGesture) videoEl.play().catch(() => {});
+                // 【修复画质切换后播放的仍是旧画质·根因】此前这里无条件 play()：JavDB 原生预告片
+                // 入口点击本身会切换播放/暂停，若脚本把"从未被增强的原生 JavDB 预览视频"也强制
+                // 播起来，enhancePreviewVideo 的节流重入与 fancybox 时序竞争下会出现——画面实际
+                // 播放的是原生 src，而工具条按钮数据来自 DMM map；点画质按钮时 target 现查到的
+                // 节点虽换了 DMM src，但 fancybox 内真正在渲染的媒体元素仍停在原生流上（表现为
+                // "高亮变了、画质没变"）。现在未增强前不抢跑 play()，等 DMM 地址就绪、换源完成后
+                // 再统一续播，保证"正在播的一定是 DMM 源"。
                 if (videoEl.dataset.jhsEnhanced === '1') {
+                    if (!wasPlayingAtGesture) videoEl.play().catch(() => {});
                     // 已增强过：播放器重新打开时补挂工具条（不再换源，保持加载速度修复）
                     if (isJhsPlayerOpened(videoEl)) showPreviewToolbar(videoEl);
                     return;
@@ -2401,6 +2408,23 @@
                 btn.classList.add('active');
                 target._jhsDefaultQuality = btn.dataset.quality;
                 videoEl._jhsDefaultQuality = btn.dataset.quality;
+                // 【修复画质切换后播放的仍是旧画质·根因2】换源后强制核验真实生效地址：
+                // 若 currentSrc 与目标画质 URL 不一致（常见于 DMM 同 CDN 多码率文件被浏览器
+                // 判定为同源、或 fancybox 重建节点导致 setAttribute 打在错误实例上），说明这次
+                // 点击没作用到真正在播的元素——直接对当前正在播放/可见的那个 video 元素重放一遍
+                // 换源流程（对齐 JAV-JHS 每次 $() 现查最新 DOM 的语义）。
+                if (target.currentSrc && btn.dataset.videoSrc && !target.currentSrc.endsWith(btn.dataset.videoSrc)) {
+                    const live = Array.from(document.querySelectorAll('#preview-video, .fancybox-content video, .jhs-video-wrap video'))
+                        .find(v => v && v !== target && !v.paused) || null;
+                    if (live) {
+                        const t2 = live.currentTime;
+                        live.setAttribute('src', btn.dataset.videoSrc);
+                        live.load();
+                        live.currentTime = t2;
+                        await live.play().catch(() => {});
+                        target = live;
+                    }
+                }
             } catch (err) {
                 console.error('切换画质失败:', err);
             }
