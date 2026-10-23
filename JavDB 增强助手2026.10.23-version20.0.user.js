@@ -52,7 +52,7 @@
         loadReviews: false,          // 查看评论信息（默认关闭）
         loadRelated: false,          // 相关清单增强（默认关闭）
         dialogOpenDetail: true,      // 弹窗方式打开页面（移植自 JAV-JHS，默认开启）
-        hoverBigImg: false           // 悬浮大图（移植自 JAV-JHS，默认关闭）
+        hoverBigImg: true            // 悬浮大图（移植自 JAV-JHS，默认开启）
     };
     let config = Object.assign({}, DEFAULT_CONFIG);  
   
@@ -941,7 +941,7 @@
             { key: 'downloadMark', label: '已下载标记', desc: '列表页封面添加✓标记按钮，并提供已下载列表（查看/添加/编辑/删除）' },
             { key: 'loadReviews', label: '评论与磁链增强', desc: '补全原生短评用户名&具体发表时间、追加第三方评论，并隐藏"更多短评需VIP"提示，同时对磁链列表进行卡片化排版美化' },
             { key: 'loadRelated', label: '相关清单增强', desc: '在短评旁创建独立"相关清单"标签，通过API加载清单列表，支持分页加载' },
-            { key: 'dialogOpenDetail', label: '弹窗方式打开页面', desc: '点击列表页封面/标题时，以居中弹窗(iframe)方式打开详情页；Ctrl/⌘+点击仍在新标签页打开（移植自JAV-JHS）' },
+            { key: 'dialogOpenDetail', label: '弹窗方式打开页面', desc: '仅点击列表页「封面图片」时以居中弹窗(iframe)打开详情页；点击标题/日期等其他位置保持原生跳转，Ctrl/⌘+点击仍在新标签页打开（移植自JAV-JHS）' },
             { key: 'hoverBigImg', label: '悬浮大图', desc: '列表页鼠标悬停封面时，浮动显示高清大图预览（移植自JAV-JHS）' },
         ];
 
@@ -1408,18 +1408,21 @@
         }
     }
 
-    // 列表页拦截封面/标题点击 → 弹窗打开（对应 JAV-JHS bindClick）
+    // 列表页拦截「封面图片」点击 → 弹窗打开（严格对齐 JAV-JHS bindClick：仅 .item img 触发弹窗，
+    // 点击标题/日期/标签等其他位置不做任何拦截，保持网站原生跳转行为）
     function setupDialogOpenDetail() {
         if (!config.dialogOpenDetail) return;
         if (setupDialogOpenDetail._bound) return;
         setupDialogOpenDetail._bound = true;
-        // 捕获阶段监听，统一拦截 .movie-list .item 内的 a.box 详情链接点击
         document.addEventListener('click', (e) => {
-            const item = e.target.closest('.movie-list .item');
+            // 只拦截对 <img> 本身的点击；非图片（标题、meta、空白区域等）一律放行
+            const img = e.target && e.target.closest ? e.target.closest('img') : null;
+            if (!img) return;
+            const item = img.closest('.movie-list .item');
             if (!item) return;
-            // 标记按钮、磁力按钮等自定义控件不拦截
+            // 标记按钮、磁力按钮等自定义控件不拦截（同 JAV-JHS 的 div.meta-buttons 排除）
             if (e.target.closest('.dl-mark-btn, .meta-buttons, [data-jhs-skip-dialog]')) return;
-            const link = e.target.closest('a.box, a[href*="/v/"]');
+            const link = item.querySelector('a.box, a[href*="/v/"]');
             if (!link) return;
             const href = link.getAttribute('href') || '';
             if (!/^\/v\//.test(href) && !href.includes('/javdb.com/v/')) return; // 只拦截详情页
@@ -1496,24 +1499,48 @@
             document.body.appendChild(this.preview);
         }
         bindEvents() {
-            document.querySelectorAll(this.config.selector).forEach(el => {
-                if (!this.boundElements.has(el)) {
-                    el.addEventListener('mouseenter', this._onEnter);
-                    el.addEventListener('mouseleave', this._onLeave);
-                    el.addEventListener('mousemove', this._onMove);
-                    this.boundElements.add(el);
+            // 使用事件委托绑定在 document 上：油猴脚本 @run-at document-idle 执行时列表早已渲染完毕，
+            // 之后翻页/瀑布流动态追加的新封面也能直接生效（不再依赖逐个元素绑定 + MutationObserver 重扫）
+            if (this._delegated) return;
+            this._delegated = true;
+            document.addEventListener('mouseover', (e) => {
+                const el = e.target && e.target.closest ? e.target.closest(this.config.selector) : null;
+                if (!el || el === this.currentTarget) return;
+                this.handleMouseEnter({ currentTarget: el, clientX: e.clientX, clientY: e.clientY });
+            }, true);
+            document.addEventListener('mousemove', (e) => {
+                const el = e.target && e.target.closest ? e.target.closest(this.config.selector) : null;
+                if (!el || el !== this.currentTarget) return;
+                this.handleMouseMove({ clientX: e.clientX, clientY: e.clientY });
+            }, true);
+            document.addEventListener('mouseout', (e) => {
+                const el = e.target && e.target.closest ? e.target.closest(this.config.selector) : null;
+                if (!el || el !== this.currentTarget) return;
+                // 仍在同一封面内部移动（如从 img 移到其子层）不隐藏
+                const to = e.relatedTarget;
+                if (to && to.closest && to.closest(this.config.selector) === el) return;
+                this.handleMouseLeave();
+            }, true);
+        }
+        // 计算高清大图地址（同 JAV-JHS replaceHdImg：JavDB 将 URL 中的 thumbs 替换为 covers）
+        getBigImageUrl(imgEl) {
+            let imgUrl = imgEl.getAttribute(this.config.dataAttribute) || '';
+            if (!imgUrl) {
+                const src = imgEl.currentSrc || imgEl.src || imgEl.getAttribute('src') || '';
+                if (!src || /nopic|placeholder/i.test(src)) return '';
+                // JavDB: https://xx.cloudfront.net/thumbs/g/.../xxx_s.jpg → covers/g/.../xxx.jpg
+                if (/thumbs/.test(src)) {
+                    imgUrl = src.replace('thumbs', 'covers').replace(/_s\.([a-z]+)(\?.*)?$/i, '.$1$2');
+                } else {
+                    imgUrl = src.replace(/_small\.jpg/i, '.jpg');
                 }
-            });
+            }
+            return imgUrl === imgEl.src ? imgUrl : (imgUrl || imgEl.src);
         }
         handleMouseEnter(e) {
             clearTimeout(this.timer);
             this.currentTarget = e.currentTarget;
-            // JavDB 封面为缩略图(_small.jpg)，优先取 data-full，否则将缩略图地址替换为大图
-            let imgUrl = this.currentTarget.getAttribute(this.config.dataAttribute) || '';
-            if (!imgUrl) {
-                const src = this.currentTarget.src || '';
-                imgUrl = src.replace(/_small\.jpg/i, '.jpg').replace(/thumb(s)?\//i, 'covers/');
-            }
+            const imgUrl = this.getBigImageUrl(this.currentTarget);
             if (!imgUrl) return;
             this.preview.innerHTML = '';
             this.preview.classList.add('loading');
@@ -1576,7 +1603,7 @@
     function initHoverBigImg() {
         if (!config.hoverBigImg) return;
         if (imageHoverPreviewObj) {
-            imageHoverPreviewObj.bindEvents(); // 动态内容重新绑定（WeakSet 防重复）
+            imageHoverPreviewObj.bindEvents(); // 事件委托模式，幂等，仅确保已绑定
         } else {
             imageHoverPreviewObj = new ImageHoverPreview();
         }
