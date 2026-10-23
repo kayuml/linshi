@@ -171,8 +171,8 @@
             if (a.hasAttribute('data-method')) return;
             // 跳过底部分页区域
             if (a.closest('nav.pagination')) return;
-            // 🚀 弹窗方式打开页面开启时，列表页详情链接交给弹窗拦截处理，不设置 _blank
-            if (config.dialogOpenDetail && a.closest('.movie-list .item')) return;
+            // 🚀 弹窗方式打开页面开启时，仅「封面图片」点击会被弹窗拦截；
+            // 标题/日期等其他位置的链接一律不干预，正常设置 _blank（新窗口打开功能保持生效）
             if (!a.getAttribute('target')) {
                 a.setAttribute('target', '_blank');
                 a.setAttribute('rel', 'noopener noreferrer');
