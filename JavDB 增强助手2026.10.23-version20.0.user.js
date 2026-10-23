@@ -1435,11 +1435,14 @@
     }
 
     // ==================== 🚀 移植自 JAV-JHS：悬浮大图 ====================
-    // 对应 JAV-JHS 的 ImageHoverPreview 类，选择器适配 JavDB：.movie-list .item .cover img
+    // 对应 JAV-JHS 的 ImageHoverPreview 类，选择器与 JAV-JHS coverImgSelector 一致：.cover img
+    // 覆盖影片列表封面(.movie-list .item .cover img)与资讯页文章卡片封面(a.article-item.box .cover img)等
     class ImageHoverPreview {
         constructor(options = {}) {
             this.config = Object.assign({
-                selector: '.movie-list .item .cover img',
+                // 同 JAV-JHS coverImgSelector：".cover img"，天然覆盖影片列表(.movie-list .item .cover img)
+                // 与资讯页文章卡片(a.article-item.box .cover img)等所有带 .cover 的封面图
+                selector: '.cover img',
                 dataAttribute: 'data-full',
                 maxWidth: 1000,
                 maxHeight: 1000,
@@ -1528,11 +1531,13 @@
             if (!imgUrl) {
                 const src = imgEl.currentSrc || imgEl.src || imgEl.getAttribute('src') || '';
                 if (!src || /nopic|placeholder/i.test(src)) return '';
-                // JavDB: https://xx.cloudfront.net/thumbs/g/.../xxx_s.jpg → covers/g/.../xxx.jpg
+                // JavDB 通用规则（同 JAV-JHS replaceHdImg）：URL 中的 thumbs 路径替换为 covers
+                // 影片封面: .../thumbs/g/001/abc_s.jpg → .../covers/g/001/abc.jpg
+                // 资讯图片: .../articles/images/... 本身即原图，直接使用 src
                 if (/thumbs/.test(src)) {
                     imgUrl = src.replace('thumbs', 'covers').replace(/_s\.([a-z]+)(\?.*)?$/i, '.$1$2');
                 } else {
-                    imgUrl = src.replace(/_small\.jpg/i, '.jpg');
+                    imgUrl = src;
                 }
             }
             return imgUrl === imgEl.src ? imgUrl : (imgUrl || imgEl.src);
