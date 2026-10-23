@@ -50,7 +50,9 @@
         autoReload503: true,         // 503错误页自动重载（默认开启）
         downloadMark: true,          // 已下载标记（默认开启）
         loadReviews: false,          // 查看评论信息（默认关闭）
-        loadRelated: false           // 相关清单增强（默认关闭）
+        loadRelated: false,          // 相关清单增强（默认关闭）
+        dialogOpenDetail: true,      // 弹窗方式打开页面（移植自 JAV-JHS，默认开启）
+        hoverBigImg: true            // 悬浮大图（移植自 JAV-JHS，默认开启）
     };
     let config = Object.assign({}, DEFAULT_CONFIG);  
   
@@ -169,6 +171,8 @@
             if (a.hasAttribute('data-method')) return;
             // 跳过底部分页区域
             if (a.closest('nav.pagination')) return;
+            // 🚀 弹窗方式打开页面开启时，仅「封面图片」点击会被弹窗拦截；
+            // 标题/日期等其他位置的链接一律不干预，正常设置 _blank（新窗口打开功能保持生效）
             if (!a.getAttribute('target')) {
                 a.setAttribute('target', '_blank');
                 a.setAttribute('rel', 'noopener noreferrer');
@@ -937,7 +941,15 @@
             { key: 'downloadMark', label: '已下载标记', desc: '列表页封面添加✓标记按钮，并提供已下载列表（查看/添加/编辑/删除）' },
             { key: 'loadReviews', label: '评论与磁链增强', desc: '补全原生短评用户名&具体发表时间、追加第三方评论，并隐藏"更多短评需VIP"提示，同时对磁链列表进行卡片化排版美化' },
             { key: 'loadRelated', label: '相关清单增强', desc: '在短评旁创建独立"相关清单"标签，通过API加载清单列表，支持分页加载' },
-        ];    
+            { key: 'dialogOpenDetail', label: '弹窗方式打开页面', desc: '仅点击列表页「封面图片」时以居中弹窗(iframe)打开详情页；点击标题/日期等其他位置保持原生跳转，Ctrl/⌘+点击仍在新标签页打开（移植自JAV-JHS）' },
+            { key: 'hoverBigImg', label: '悬浮大图', desc: '列表页鼠标悬停封面时，浮动显示高清大图预览（移植自JAV-JHS）' },
+        ];
+
+        // 画质下拉框（移植自 JAV-JHS 预览视频画质选择，其余预览视频功能本轮未移植，暂不渲染该区块）
+        const QUALITY_OPTIONS = [];
+        const videoQualityOptionsHtml = QUALITY_OPTIONS.map(q =>
+            `<option value="${q.quality}" ${config.videoQuality === q.quality ? 'selected' : ''}>${q.text}</option>`).join('');
+        const showVideoQualitySection = QUALITY_OPTIONS.length > 0;    
   
         panel.innerHTML = `
             <div class="javdb-settings-header">
@@ -958,6 +970,19 @@
                     </div>`;
                 }).join('')}
             </div>
+            ${showVideoQualitySection ? `
+            <div class="javdb-settings-section">
+                <h3>🎬 预览视频设置（移植自 JAV-JHS）</h3>
+                <div class="javdb-setting-item" style="margin-bottom: 0;">
+                    <div class="javdb-setting-head">
+                        <span class="javdb-setting-label">默认画质偏好</span>
+                    </div>
+                    <div class="javdb-setting-desc">解析 DMM/FANZA 预告片源时优先选择的画质，不可用时自动降级到次高可用画质</div>
+                    <select id="javdb-video-quality" class="javdb-input" style="width: 100%; margin-top: 6px;">
+                        ${videoQualityOptionsHtml}
+                    </select>
+                </div>
+            </div>` : ''}
             <div class="javdb-settings-section">
                 <h3>💾 数据备份与恢复</h3>
                 <p>包含：功能开关设置、已下载标记列表（含链接/系列）</p>
@@ -1269,6 +1294,334 @@
     }  
   
     // ==================== 功能实现 ====================  
+
+    // ==================== 🚀 移植自 JAV-JHS：弹窗方式打开页面 ====================
+    // 对应 JAV-JHS 的 utils.openPage + layer.open(type:2, iframe) 方案，
+    // 此处不引入 layui-layer，改为自建 modal + iframe 实现同等效果。
+    let jhsDialogStack = [];   // 记录已打开的弹窗层级，支持多层/Esc关闭最上层
+
+    function injectDialogStyles() {
+        if (document.getElementById('jhs-dialog-style')) return;
+        const style = document.createElement('style');
+        style.id = 'jhs-dialog-style';
+        style.textContent = `
+            .jhs-dialog-shade {
+                position: fixed; inset: 0; z-index: 2147483540;
+                background: rgba(0, 0, 0, 0.6);
+                opacity: 0; transition: opacity 0.2s ease;
+            }
+            .jhs-dialog-box {
+                position: fixed; z-index: 2147483541;
+                left: 50%; top: 50%; transform: translate(-50%, -50%);
+                width: 85vw; height: 90vh; max-width: 1600px;
+                background: #fff; border-radius: 8px; overflow: hidden;
+                box-shadow: 0 8px 40px rgba(0, 0, 0, 0.45);
+                display: flex; flex-direction: column;
+                opacity: 0; transition: opacity 0.2s ease;
+            }
+            .jhs-dialog-shade.active, .jhs-dialog-box.active { opacity: 1; }
+            .jhs-dialog-header {
+                flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between;
+                padding: 10px 16px; background: #f5f6f8; border-bottom: 1px solid #e3e5e8;
+                font-size: 15px; font-weight: 600; color: #333; user-select: none;
+            }
+            .jhs-dialog-title {
+                flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+            }
+            .jhs-dialog-close {
+                flex: 0 0 auto; margin-left: 12px; width: 28px; height: 28px; line-height: 24px;
+                border: 1px solid #ccc; border-radius: 4px; background: #fff; color: #666;
+                font-size: 18px; cursor: pointer; text-align: center;
+            }
+            .jhs-dialog-close:hover { background: #e74c3c; color: #fff; border-color: #e74c3c; }
+            .jhs-dialog-frame { flex: 1 1 auto; width: 100%; border: 0; background: #fff; }
+        `;
+        document.head.appendChild(style);
+    }
+
+    function closeJhsDialog(index) {
+        const entry = jhsDialogStack.find(d => d.index === index);
+        if (!entry) return;
+        jhsDialogStack = jhsDialogStack.filter(d => d !== entry);
+        entry.box.classList.remove('active');
+        entry.shade.classList.remove('active');
+        setTimeout(() => {
+            entry.box.remove();
+            entry.shade.remove();
+            // 最后一层关闭后恢复 body 滚动
+            if (jhsDialogStack.length === 0) {
+                document.body.style.overflow = entry.prevOverflow || '';
+            }
+        }, 200);
+    }
+
+    // 打开弹窗页面（对应 JAV-JHS utils.openPage）
+    function openPageDialog(url, title, event) {
+        if (!url) return;
+        // Ctrl/⌘+点击 → 新标签页打开（与原脚本行为一致）
+        if (event && (event.ctrlKey || event.metaKey)) {
+            window.open(url.includes('http') ? url : window.location.origin + url, '_blank');
+            return;
+        }
+        injectDialogStyles();
+        // 演员页不加 hideNav，普通详情页追加 hideNav=1 隐藏导航（同 JAV-JHS）
+        let finalUrl = url;
+        if (!/\/actors\/|\/stars?\//.test(url)) {
+            finalUrl = url.includes('?') ? `${url}&hideNav=1` : `${url}?hideNav=1`;
+        }
+        const prevOverflow = document.body.style.overflow;
+        document.body.style.overflow = 'hidden';
+
+        const shade = document.createElement('div');
+        shade.className = 'jhs-dialog-shade';
+        const box = document.createElement('div');
+        box.className = 'jhs-dialog-box';
+        const index = Date.now() + Math.floor(Math.random() * 1000);
+        box.innerHTML = `
+            <div class="jhs-dialog-header">
+                <span class="jhs-dialog-title"></span>
+                <button class="jhs-dialog-close" title="关闭 (Esc)">×</button>
+            </div>
+            <iframe class="jhs-dialog-frame" src="${finalUrl}" allow="autoplay; fullscreen"></iframe>
+        `;
+        box.querySelector('.jhs-dialog-title').textContent = title || finalUrl;
+        box.querySelector('.jhs-dialog-close').onclick = () => closeJhsDialog(index);
+        shade.onclick = () => closeJhsDialog(index); // shadeClose 默认开启
+
+        document.body.appendChild(shade);
+        document.body.appendChild(box);
+        requestAnimationFrame(() => {
+            shade.classList.add('active');
+            box.classList.add('active');
+        });
+        jhsDialogStack.push({ index, box, shade, prevOverflow });
+
+        // Esc 关闭最上层弹窗
+        if (!openPageDialog._escBound) {
+            openPageDialog._escBound = true;
+            document.addEventListener('keydown', (e) => {
+                if (e.key !== 'Escape' && e.keyCode !== 27) return;
+                if (jhsDialogStack.length === 0) return;
+                const top = jhsDialogStack[jhsDialogStack.length - 1];
+                closeJhsDialog(top.index);
+            });
+        }
+    }
+
+    // 列表页拦截「封面图片」点击 → 弹窗打开（严格对齐 JAV-JHS bindClick：仅 .item img 触发弹窗，
+    // 点击标题/日期/标签等其他位置不做任何拦截，保持网站原生跳转行为）
+    function setupDialogOpenDetail() {
+        if (!config.dialogOpenDetail) return;
+        if (setupDialogOpenDetail._bound) return;
+        setupDialogOpenDetail._bound = true;
+        document.addEventListener('click', (e) => {
+            // 只拦截对 <img> 本身的点击；非图片（标题、meta、空白区域等）一律放行
+            const img = e.target && e.target.closest ? e.target.closest('img') : null;
+            if (!img) return;
+            const item = img.closest('.movie-list .item');
+            if (!item) return;
+            // 标记按钮、磁力按钮等自定义控件不拦截（同 JAV-JHS 的 div.meta-buttons 排除）
+            if (e.target.closest('.dl-mark-btn, .meta-buttons, [data-jhs-skip-dialog]')) return;
+            const link = item.querySelector('a.box, a[href*="/v/"]');
+            if (!link) return;
+            const href = link.getAttribute('href') || '';
+            if (!/^\/v\//.test(href) && !href.includes('/javdb.com/v/')) return; // 只拦截详情页
+            e.preventDefault();
+            e.stopPropagation();
+            const codeEl = item.querySelector('.video-title strong') || item.querySelector('.title');
+            const code = codeEl ? codeEl.textContent.trim() : '';
+            openPageDialog(link.href, code, e);
+        }, true);
+    }
+
+    // ==================== 🚀 移植自 JAV-JHS：悬浮大图 ====================
+    // 对应 JAV-JHS 的 ImageHoverPreview 类，选择器与 JAV-JHS coverImgSelector 一致：.cover img
+    // 覆盖影片列表封面(.movie-list .item .cover img)与资讯页文章卡片封面(a.article-item.box .cover img)等
+    class ImageHoverPreview {
+        constructor(options = {}) {
+            this.config = Object.assign({
+                // 同 JAV-JHS coverImgSelector：".cover img"，天然覆盖影片列表(.movie-list .item .cover img)
+                // 与资讯页文章卡片(a.article-item.box .cover img)等所有带 .cover 的封面图
+                selector: '.cover img',
+                dataAttribute: 'data-full',
+                // 尺寸上限不再固定 1000px（资讯大图常超出屏幕），而是动态取视口的 90%
+                maxWidth: Math.floor(window.innerWidth * 0.9),
+                maxHeight: Math.floor(window.innerHeight * 0.9),
+                offsetX: 20,
+                offsetY: 20,
+                zIndex: 2147483530,
+                transition: 0.2,
+                autoAdjustPosition: true
+            }, options);
+            this.preview = null;
+            this.currentTarget = null;
+            this.timer = null;
+            this.imgElement = null;
+            this.boundElements = new WeakSet();
+            this._onEnter = (e) => this.handleMouseEnter(e);
+            this._onLeave = (e) => this.handleMouseLeave(e);
+            this._onMove = (e) => this.handleMouseMove(e);
+            this.init();
+        }
+        init() {
+            this.injectStyles();
+            this.createPreviewElement();
+            this.bindEvents();
+        }
+        injectStyles() {
+            if (document.getElementById('jhs-hover-preview-style')) return;
+            const style = document.createElement('style');
+            style.id = 'jhs-hover-preview-style';
+            style.textContent = `
+                .image-hover-preview {
+                    position: fixed; display: none;
+                    z-index: ${this.config.zIndex};
+                    border-radius: 4px;
+                    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+                    overflow: hidden; pointer-events: none;
+                    opacity: 0; transition: opacity ${this.config.transition}s ease;
+                    background-color: #fff;
+                }
+                .image-hover-preview.active { opacity: 1; }
+                .image-hover-preview img {
+                    display: block; object-fit: contain;
+                }
+                .image-hover-preview.loading::before {
+                    content: '加载中...';
+                    position: absolute; top: 50%; left: 50%;
+                    transform: translate(-50%, -50%);
+                    color: #666; font-size: 14px;
+                }
+            `;
+            document.head.appendChild(style);
+        }
+        createPreviewElement() {
+            this.preview = document.createElement('div');
+            this.preview.className = 'image-hover-preview';
+            document.body.appendChild(this.preview);
+        }
+        bindEvents() {
+            // 使用事件委托绑定在 document 上：油猴脚本 @run-at document-idle 执行时列表早已渲染完毕，
+            // 之后翻页/瀑布流动态追加的新封面也能直接生效（不再依赖逐个元素绑定 + MutationObserver 重扫）
+            if (this._delegated) return;
+            this._delegated = true;
+            document.addEventListener('mouseover', (e) => {
+                const el = e.target && e.target.closest ? e.target.closest(this.config.selector) : null;
+                if (!el || el === this.currentTarget) return;
+                this.handleMouseEnter({ currentTarget: el, clientX: e.clientX, clientY: e.clientY });
+            }, true);
+            document.addEventListener('mousemove', (e) => {
+                const el = e.target && e.target.closest ? e.target.closest(this.config.selector) : null;
+                if (!el || el !== this.currentTarget) return;
+                this.handleMouseMove({ clientX: e.clientX, clientY: e.clientY });
+            }, true);
+            document.addEventListener('mouseout', (e) => {
+                const el = e.target && e.target.closest ? e.target.closest(this.config.selector) : null;
+                if (!el || el !== this.currentTarget) return;
+                // 仍在同一封面内部移动（如从 img 移到其子层）不隐藏
+                const to = e.relatedTarget;
+                if (to && to.closest && to.closest(this.config.selector) === el) return;
+                this.handleMouseLeave();
+            }, true);
+        }
+        // 计算高清大图地址（同 JAV-JHS replaceHdImg：JavDB 将 URL 中的 thumbs 替换为 covers）
+        getBigImageUrl(imgEl) {
+            let imgUrl = imgEl.getAttribute(this.config.dataAttribute) || '';
+            if (!imgUrl) {
+                const src = imgEl.currentSrc || imgEl.src || imgEl.getAttribute('src') || '';
+                if (!src || /nopic|placeholder/i.test(src)) return '';
+                // JavDB 通用规则（同 JAV-JHS replaceHdImg）：URL 中的 thumbs 路径替换为 covers
+                // 影片封面: .../thumbs/g/001/abc_s.jpg → .../covers/g/001/abc.jpg
+                // 资讯图片: .../articles/images/... 本身即原图，直接使用 src
+                if (/thumbs/.test(src)) {
+                    imgUrl = src.replace('thumbs', 'covers').replace(/_s\.([a-z]+)(\?.*)?$/i, '.$1$2');
+                } else {
+                    imgUrl = src;
+                }
+            }
+            return imgUrl === imgEl.src ? imgUrl : (imgUrl || imgEl.src);
+        }
+        handleMouseEnter(e) {
+            clearTimeout(this.timer);
+            this.currentTarget = e.currentTarget;
+            const imgUrl = this.getBigImageUrl(this.currentTarget);
+            if (!imgUrl) return;
+            this.preview.innerHTML = '';
+            this.preview.classList.add('loading');
+            this.preview.style.display = 'block';
+            this.preview.classList.remove('active');
+            const img = new Image();
+            img.onload = () => {
+                if (this.currentTarget !== e.currentTarget) return; // 鼠标已移开
+                this.preview.classList.remove('loading');
+                this.preview.innerHTML = `<img src="${imgUrl}" alt="预览图">`;
+                this.imgElement = this.preview.querySelector('img');
+                const { width, height } = this.calculateImageSize(img);
+                this.preview.style.width = `${width}px`;
+                this.preview.style.height = `${height}px`;
+                void this.preview.offsetHeight;
+                this.preview.classList.add('active');
+                this.handleMouseMove(e);
+            };
+            img.onerror = () => {
+                this.preview.classList.remove('loading');
+                this.preview.innerHTML = '<div style="padding:10px;color:#f00;">图片加载失败</div>';
+            };
+            img.src = imgUrl;
+        }
+        calculateImageSize(img) {
+            // 每次计算时动态取当前视口尺寸（窗口缩放后也能适应），最大不超过视口的 90%
+            const maxW = Math.floor(window.innerWidth * 0.9);
+            const maxH = Math.floor(window.innerHeight * 0.9);
+            let width = img.naturalWidth, height = img.naturalHeight;
+            if (width > maxW || height > maxH) {
+                const ratio = Math.min(maxW / width, maxH / height);
+                width *= ratio;
+                height *= ratio;
+            }
+            // 兜底：即使比例计算有误差，也绝不允许超过视口可用范围
+            width = Math.min(width, maxW);
+            height = Math.min(height, maxH);
+            return { width: Math.round(width), height: Math.round(height) };
+        }
+        handleMouseMove(e) {
+            if (!this.currentTarget || !this.preview.classList.contains('active')) return;
+            const { offsetX, offsetY } = this.config;
+            let left = e.clientX + offsetX, top = e.clientY + offsetY;
+            if (this.config.autoAdjustPosition) {
+                const pw = this.preview.offsetWidth, ph = this.preview.offsetHeight;
+                const vw = window.innerWidth, vh = window.innerHeight;
+                // 先尝试常规位置（鼠标右下），越界则翻转到左上
+                if (left + pw > vw) left = e.clientX - pw - offsetX;
+                if (top + ph > vh) top = e.clientY - ph - offsetY;
+                // 翻转后仍越界（如图几乎占满视口）：直接夹紧到视口内，保证完整可见不超出屏幕
+                left = Math.max(0, Math.min(left, vw - pw));
+                top = Math.max(0, Math.min(top, vh - ph));
+            }
+            this.preview.style.left = `${left}px`;
+            this.preview.style.top = `${top}px`;
+        }
+        handleMouseLeave() {
+            this.preview.classList.remove('active');
+            this.preview.style.display = 'none';
+            this.currentTarget = null;
+            this.imgElement = null;
+        }
+        destroy() {
+            this.preview && this.preview.parentNode && this.preview.parentNode.removeChild(this.preview);
+        }
+    }
+
+    let imageHoverPreviewObj = null;
+    function initHoverBigImg() {
+        if (!config.hoverBigImg) return;
+        if (imageHoverPreviewObj) {
+            imageHoverPreviewObj.bindEvents(); // 事件委托模式，幂等，仅确保已绑定
+        } else {
+            imageHoverPreviewObj = new ImageHoverPreview();
+        }
+    }
+
     // CSS样式注入（根据配置动态生成）
     function injectStyles() {
         let styles = '';  
@@ -4232,6 +4585,10 @@
             if (config.loadReviews) {
                 mergeThirdPartyReviews();
             }
+            // 🚀 悬浮大图：动态加载/瀑布流追加的封面重新绑定（WeakSet 幂等）
+            if (config.hoverBigImg) {
+                initHoverBigImg();
+            }
         });
         
         // 尝试安全地添加观察者
@@ -4302,6 +4659,9 @@
             if (config.loadRelated) {
                 initRelatedEnhancement();
             }
+            // 🚀 移植自 JAV-JHS：弹窗方式打开页面 + 悬浮大图
+            setupDialogOpenDetail();
+            initHoverBigImg();
         } else {
             document.addEventListener('DOMContentLoaded', () => {
                 init();
