@@ -2155,9 +2155,11 @@
                 // 用旧数据渲染的工具条，再按最新 map 重挂——保证按钮 data-video-src 与当前源一致，
                 // 杜绝"高亮变了但实际播放的仍是一开始加载的画质"
                 if (wasVisible) {
-                    // 与 JAV-JHS handleVideo 一致：播放器打开状态下应用静音偏好并继续播放
+                    // 【修复 cb158f5 回归】上一版这里无条件 play()，导致用户刚点暂停就被静默
+                    // 增强（800ms 节流轮询）强制恢复播放——表现为"无法暂停视频"。现改为尊重
+                    // 用户播放意图：paused 时不 play；仅当用户此前处于播放状态才续播。
                     applyJhsMutedPreference(videoEl);
-                    videoEl.play().catch(() => {});
+                    if (!videoEl.paused) videoEl.play().catch(() => {});
                     const staleToolbar = document.querySelector('#video-bottom-toolbar');
                     if (staleToolbar) staleToolbar.remove();
                     showPreviewToolbar(videoEl);
@@ -2233,17 +2235,27 @@
             setTimeout(async () => {
                 let videoEl = document.querySelector('#preview-video');
                 if (!videoEl) return;
-                // 与 JAV-JHS handleVideo 一致：播放器打开即恢复播放（此前只挂工具条不 play，
-                // 导致增强未完成时点击预告片画面停在首帧、看似"加载卡顿/无效"）
+                // 【修复 cb158f5 回归：无法暂停视频】手势时刻检测播放意图：
+                // JavDB 原生预告片入口点击本身会切换播放/暂停——若此刻视频正在播放，
+                // 说明这次点击是"暂停"手势，脚本绝不能再补 play() 把它弹回播放。
+                const wasPlayingAtGesture = !videoEl.paused;
                 applyJhsMutedPreference(videoEl);
-                videoEl.play().catch(() => {});
+                if (!wasPlayingAtGesture) videoEl.play().catch(() => {});
                 if (videoEl.dataset.jhsEnhanced === '1') {
-                    // 已增强过：播放器重新打开时补挂工具条
+                    // 已增强过：播放器重新打开时补挂工具条（不再换源，保持加载速度修复）
                     if (videoEl.offsetParent !== null) showPreviewToolbar(videoEl);
                     return;
                 }
                 const code = extractDetailCode();
                 if (!code) return;
+                // 【修复画质按钮点击无反应】懒钩子与静默 enhancePreviewVideo 并发解析同一番号时，
+                // 两侧先后各自渲染工具条，后一侧 remove+重建销毁了前一侧刚绑定的委托监听节点，
+                // 表现为"按钮在、点了没反应"。现加并发锁：另一侧正在解析时本路径直接跳过，
+                // 工具条统一由持有锁的一侧渲染（enhancePreviewVideo 的 finally 释放锁）。
+                if (getDmmVideo._inflight && getDmmVideo._inflight(code)) {
+                    if (videoEl.offsetParent !== null) showPreviewToolbar(videoEl);
+                    return;
+                }
                 const dmmVideoMap = await getDmmVideo(code);
                 if (!dmmVideoMap) return;
                 // 异步解析期间 fancybox 可能已重建播放器节点，重新获取最新引用（对齐 JAV-JHS handleVideo 每次现查）
@@ -2266,7 +2278,8 @@
                 }
                 const staleToolbar = document.querySelector('#video-bottom-toolbar');
                 if (staleToolbar) staleToolbar.remove();
-                videoEl.play().catch(() => {});
+                // 【修复 cb158f5 回归：无法暂停视频】手势时刻为"暂停"意图时不强制 play
+                if (!wasPlayingAtGesture) videoEl.play().catch(() => {});
                 showPreviewToolbar(videoEl);
             }, 300);
         }, true);
@@ -2316,12 +2329,21 @@
             videoEl.style.maxHeight = '70vh';
             parent = wrap;
         }
-        if (parent.querySelector(':scope > #video-bottom-toolbar')) return; // 幂等
+        // 【修复画质按钮点击无反应】幂等策略升级：已存在工具条且其数据与当前 map/默认画质
+        // 一致时直接复用（监听完好、不销毁重建）；仅当数据不一致时才 remove+重建。
+        // 此前"remove 旧工具条再重建"会在懒钩子/静默增强并发时销毁刚绑定的委托监听，
+        // 导致按钮渲染出来了但点了没反应。
+        const existingToolbar = parent.querySelector(':scope > #video-bottom-toolbar');
+        if (existingToolbar) {
+            if (existingToolbar.dataset.jhsQuality === (videoEl._jhsDefaultQuality || defaultQuality)) return; // 数据一致，复用
+            existingToolbar.remove(); // 数据不一致才重建
+        }
         const staleToolbar = document.querySelector('#video-bottom-toolbar');
-        if (staleToolbar) staleToolbar.remove(); // 清理挂在其它节点上的旧工具条，杜绝双工具条/旧数据按钮
+        if (staleToolbar && staleToolbar !== existingToolbar) staleToolbar.remove(); // 清理挂在其它节点上的旧工具条
         parent.style.position = 'relative';
         const toolbar = document.createElement('div');
         toolbar.id = 'video-bottom-toolbar';
+        toolbar.dataset.jhsQuality = videoEl._jhsDefaultQuality || defaultQuality || '';
         toolbar.style.cssText = 'display:flex;gap:5px;align-items:center;flex-wrap:wrap;margin-top:6px;';
         const group = document.createElement('div');
         group.style.cssText = 'display:flex;gap:5px;align-items:center;flex-wrap:wrap;';
