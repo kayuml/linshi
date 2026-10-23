@@ -17,6 +17,11 @@
 // @connect      google.com
 // @connect      www.google.com
 // @connect      127.0.0.1
+// @connect      javstore.net
+// @connect      api.dmm.com
+// @connect      www.dmm.co.jp
+// @connect      cc3001.dmm.co.jp
+// @connect      special.dmm.co.jp
 // @connect      *
 // @run-at       document-start  
 // @icon         
@@ -51,8 +56,13 @@
         downloadMark: true,          // 已下载标记（默认开启）
         loadReviews: false,          // 查看评论信息（默认关闭）
         loadRelated: false,          // 相关清单增强（默认关闭）
-        dialogOpenDetail: true,      // 弹窗方式打开页面（移植自 JAV-JHS，默认开启）
-        hoverBigImg: true            // 悬浮大图（移植自 JAV-JHS，默认开启）
+        dialogOpenDetail: true,      // 弹窗方式打开页面（默认开启）
+        hoverBigImg: true,           // 悬浮大图（默认开启）
+        enableLoadScreenShot: true,  // 详情页加载长缩略图（默认开启）
+        enableLoadPreviewVideo: true,// 更高画质预览视频-DMM/FANZA（默认开启）
+        enableScreenSvg: true,       // 封面快捷按钮：长缩略图（默认开启）
+        enableVideoSvg: true,        // 封面快捷按钮：预览视频（默认开启）
+        videoQuality: 'hhb'          // 预览视频默认画质偏好
     };
     let config = Object.assign({}, DEFAULT_CONFIG);  
   
@@ -941,15 +951,18 @@
             { key: 'downloadMark', label: '已下载标记', desc: '列表页封面添加✓标记按钮，并提供已下载列表（查看/添加/编辑/删除）' },
             { key: 'loadReviews', label: '评论与磁链增强', desc: '补全原生短评用户名&具体发表时间、追加第三方评论，并隐藏"更多短评需VIP"提示，同时对磁链列表进行卡片化排版美化' },
             { key: 'loadRelated', label: '相关清单增强', desc: '在短评旁创建独立"相关清单"标签，通过API加载清单列表，支持分页加载' },
-            { key: 'dialogOpenDetail', label: '弹窗方式打开页面', desc: '仅点击列表页「封面图片」时以居中弹窗(iframe)打开详情页；点击标题/日期等其他位置保持原生跳转，Ctrl/⌘+点击仍在新标签页打开（移植自JAV-JHS）' },
-            { key: 'hoverBigImg', label: '悬浮大图', desc: '列表页鼠标悬停封面时，浮动显示高清大图预览（移植自JAV-JHS）' },
+            { key: 'dialogOpenDetail', label: '弹窗方式打开页面', desc: '仅点击列表页「封面图片」时以居中弹窗(iframe)打开详情页；点击标题/日期等其他位置不受干预，Ctrl/⌘+点击仍在新标签页打开' },
+            { key: 'hoverBigImg', label: '悬浮大图', desc: '鼠标悬停封面（影片列表/资讯卡片）时，浮动显示高清大图预览' },
+            { key: 'enableLoadScreenShot', label: '加载长缩略图', desc: '影片详情页预览区首位插入 javstore 长缩略图，失败可重试' },
+            { key: 'enableLoadPreviewVideo', label: '更高画质预览视频', desc: '解析 DMM/FANZA 预告片源替换详情页原生低画质预览视频，并提供画质切换按钮（DMM域名需可访问日本IP）' },
+            { key: 'enableScreenSvg', label: '封面快捷按钮：长缩略图', desc: '列表页封面右下角添加 📏 按钮，点击全屏查看该番号长缩略图' },
+            { key: 'enableVideoSvg', label: '封面快捷按钮：预览视频', desc: '列表页封面右下角添加 ▶ 按钮，点击就地播放 DMM 高画质预告片，再点切回封面' },
         ];
 
-        // 画质下拉框（移植自 JAV-JHS 预览视频画质选择，其余预览视频功能本轮未移植，暂不渲染该区块）
-        const QUALITY_OPTIONS = [];
-        const videoQualityOptionsHtml = QUALITY_OPTIONS.map(q =>
+        // 画质下拉框
+        const videoQualityOptionsHtml = QUALITY_OPTIONS.filter(q => q.canSelect).map(q =>
             `<option value="${q.quality}" ${config.videoQuality === q.quality ? 'selected' : ''}>${q.text}</option>`).join('');
-        const showVideoQualitySection = QUALITY_OPTIONS.length > 0;    
+        const showVideoQualitySection = true;
   
         panel.innerHTML = `
             <div class="javdb-settings-header">
@@ -972,7 +985,7 @@
             </div>
             ${showVideoQualitySection ? `
             <div class="javdb-settings-section">
-                <h3>🎬 预览视频设置（移植自 JAV-JHS）</h3>
+                <h3>🎬 预览视频设置</h3>
                 <div class="javdb-setting-item" style="margin-bottom: 0;">
                     <div class="javdb-setting-head">
                         <span class="javdb-setting-label">默认画质偏好</span>
@@ -1067,7 +1080,10 @@
             }    
         };    
   
-        panel.querySelector('#javdb-save-btn').onclick = () => {    
+        panel.querySelector('#javdb-save-btn').onclick = () => {
+            // 读取预览视频默认画质偏好（区块渲染时该下拉框一定存在，做 null 防御）
+            const vqSel = panel.querySelector('#javdb-video-quality');
+            if (vqSel && vqSel.value) config.videoQuality = vqSel.value;
             saveConfig();    
             alert('设置已保存！页面将刷新以应用新设置。');    
             location.reload();    
@@ -1295,8 +1311,8 @@
   
     // ==================== 功能实现 ====================  
 
-    // ==================== 🚀 移植自 JAV-JHS：弹窗方式打开页面 ====================
-    // 对应 JAV-JHS 的 utils.openPage + layer.open(type:2, iframe) 方案，
+    // ==================== 🚀 弹窗方式打开页面 ====================
+ // iframe) 方案，
     // 此处不引入 layui-layer，改为自建 modal + iframe 实现同等效果。
     let jhsDialogStack = [];   // 记录已打开的弹窗层级，支持多层/Esc关闭最上层
 
@@ -1339,6 +1355,30 @@
         document.head.appendChild(style);
     }
 
+    // 封面快捷按钮样式：独立注入并置于 <head> 最末尾。
+    // 此前这些规则与弹窗样式合并在同一个 style 里，且只在第一次点击封面弹窗时才注入——
+    // 刷新后从未调用 injectDialogStyles()，导致暗色主题下 svg path 覆盖规则缺失，
+    // 按钮颜色停留在浏览器默认解析的内联 fill（即浅色主题配色）。
+    function injectCoverButtonStyles() {
+        if (document.getElementById('jhs-cover-btn-style')) return;
+        const style = document.createElement('style');
+        style.id = 'jhs-cover-btn-style';
+        style.textContent = `
+            /* 封面快捷按钮：样式对齐 JAV-JHS CoverButtonPlugin（.tool-box span 默认 opacity .3，悬停 1） */
+            .box .tags { justify-content: space-between; }
+            .jhs-tool-box { flex: 0 0 auto !important; justify-content: flex-end; align-items: center; }
+            .jhs-tool-box span{ opacity:.3 }
+            .jhs-tool-box span:hover{ opacity:1 }
+            .jhs-tool-box .jhs-icon { width: 1.5rem; height: 1.5rem; }
+            /* 注意：两条 svg path 规则的特异性必须一致（均为 [data-theme] + 4 类/元素），
+               若暗色规则写成 html[data-theme] 而亮色写 [data-theme]，亮色特异性更高会反胜——
+               这正是此前"暗色主题下按钮仍是浅色配色"的根因之一 */
+            [data-theme="dark"] .jhs-tool-box svg path { fill: white; }
+            .jhs-tool-box svg path { fill: blue; }
+        `;
+        document.head.appendChild(style);
+    }
+
     function closeJhsDialog(index) {
         const entry = jhsDialogStack.find(d => d.index === index);
         if (!entry) return;
@@ -1355,7 +1395,7 @@
         }, 200);
     }
 
-    // 打开弹窗页面（对应 JAV-JHS utils.openPage）
+ // 打开弹窗页面
     function openPageDialog(url, title, event) {
         if (!url) return;
         // Ctrl/⌘+点击 → 新标签页打开（与原脚本行为一致）
@@ -1364,7 +1404,7 @@
             return;
         }
         injectDialogStyles();
-        // 演员页不加 hideNav，普通详情页追加 hideNav=1 隐藏导航（同 JAV-JHS）
+ // 演员页不加 hideNav，普通详情页追加 hideNav=1 隐藏导航
         let finalUrl = url;
         if (!/\/actors\/|\/stars?\//.test(url)) {
             finalUrl = url.includes('?') ? `${url}&hideNav=1` : `${url}?hideNav=1`;
@@ -1408,7 +1448,7 @@
         }
     }
 
-    // 列表页拦截「封面图片」点击 → 弹窗打开（严格对齐 JAV-JHS bindClick：仅 .item img 触发弹窗，
+ // 列表页拦截「封面图片」点击 → 弹窗打开（bindClick：仅 .item img 触发弹窗，
     // 点击标题/日期/标签等其他位置不做任何拦截，保持网站原生跳转行为）
     function setupDialogOpenDetail() {
         if (!config.dialogOpenDetail) return;
@@ -1420,7 +1460,7 @@
             if (!img) return;
             const item = img.closest('.movie-list .item');
             if (!item) return;
-            // 标记按钮、磁力按钮等自定义控件不拦截（同 JAV-JHS 的 div.meta-buttons 排除）
+ // 标记按钮、磁力按钮等自定义控件不拦截
             if (e.target.closest('.dl-mark-btn, .meta-buttons, [data-jhs-skip-dialog]')) return;
             const link = item.querySelector('a.box, a[href*="/v/"]');
             if (!link) return;
@@ -1434,13 +1474,13 @@
         }, true);
     }
 
-    // ==================== 🚀 移植自 JAV-JHS：悬浮大图 ====================
-    // 对应 JAV-JHS 的 ImageHoverPreview 类，选择器与 JAV-JHS coverImgSelector 一致：.cover img
+    // ==================== 🚀 悬浮大图 ====================
+ // 通用选择器：.cover img（覆盖影片列表与资讯卡片）
     // 覆盖影片列表封面(.movie-list .item .cover img)与资讯页文章卡片封面(a.article-item.box .cover img)等
     class ImageHoverPreview {
         constructor(options = {}) {
             this.config = Object.assign({
-                // 同 JAV-JHS coverImgSelector：".cover img"，天然覆盖影片列表(.movie-list .item .cover img)
+ // coverImgSelector：".cover img"，天然覆盖影片列表(.movie-list .item .cover img)
                 // 与资讯页文章卡片(a.article-item.box .cover img)等所有带 .cover 的封面图
                 selector: '.cover img',
                 dataAttribute: 'data-full',
@@ -1524,13 +1564,13 @@
                 this.handleMouseLeave();
             }, true);
         }
-        // 计算高清大图地址（同 JAV-JHS replaceHdImg：JavDB 将 URL 中的 thumbs 替换为 covers）
+ // 计算高清大图地址
         getBigImageUrl(imgEl) {
             let imgUrl = imgEl.getAttribute(this.config.dataAttribute) || '';
             if (!imgUrl) {
                 const src = imgEl.currentSrc || imgEl.src || imgEl.getAttribute('src') || '';
                 if (!src || /nopic|placeholder/i.test(src)) return '';
-                // JavDB 通用规则（同 JAV-JHS replaceHdImg）：URL 中的 thumbs 路径替换为 covers
+ // JavDB 通用规则：URL 中的 thumbs 路径替换为 covers
                 // 影片封面: .../thumbs/g/001/abc_s.jpg → .../covers/g/001/abc.jpg
                 // 资讯图片: .../articles/images/... 本身即原图，直接使用 src
                 if (/thumbs/.test(src)) {
@@ -1620,6 +1660,977 @@
         } else {
             imageHoverPreviewObj = new ImageHoverPreview();
         }
+    }
+
+    // ==================== 🚀 长缩略图 / 更高画质预览视频 / 封面快捷按钮 ====================
+
+ // 画质选项表
+    const QUALITY_OPTIONS = [
+        { id: 'video-sm_s',  quality: 'sm_s',  text: '旧视频源-低画质 (240p)',          canSelect: false },
+        { id: 'video-dm_s',  quality: 'dm_s',  text: '旧视频源-中画质 (360p)',          canSelect: false },
+        { id: 'video-dmb_s', quality: 'dmb_s', text: '旧视频源-中画质 (480p)',          canSelect: false },
+        { id: 'video-mmb',   quality: 'mmb',   text: '中画质 (432p)',                   canSelect: true  },
+        { id: 'video-mhb',   quality: 'mhb',   text: '高画质 (576p)',                   canSelect: true  },
+        { id: 'video-hmb',   quality: 'hmb',   text: 'HD (720p)',                       canSelect: true  },
+        { id: 'video-hhb',   quality: 'hhb',   text: 'FullHD (1080p)',                  canSelect: true  },
+        { id: 'video-hhbs',  quality: 'hhbs',  text: 'FullHD (1080p60fps)',             canSelect: true  },
+        { id: 'video-4k',    quality: '4k',    text: '4K (2160p)',                      canSelect: true  },
+        { id: 'video-4ks',   quality: '4ks',   text: '4K (2160p60fps)',                 canSelect: true  }
+    ];
+
+ // 默认画质不可用时按优先级降级
+    function selectDefaultQuality(dmmVideoQualityList, intendedDefault) {
+        if (!dmmVideoQualityList || dmmVideoQualityList.length === 0) return null;
+        const availableSet = new Set(dmmVideoQualityList);
+        if (availableSet.has(intendedDefault)) return intendedDefault;
+        const priorityOrder = QUALITY_OPTIONS.map(o => o.quality).reverse();
+        for (const quality of priorityOrder) {
+            if (availableSet.has(quality)) return quality;
+        }
+        return dmmVideoQualityList[0];
+    }
+
+     // 直接搬运 JAV-JHS gmHttp.gmRequest + utils.retry：默认超时 5s、重试 3 次、瞬时失败立即重试（无退避等待）。
+    // 此前自研的"15s 超时+重试1次+800ms 退避"版本在 DMM API 偶发失败时整链路耗时成倍放大，是详情页预览视频加载卡顿的根因之一。
+    async function jhsRetry(fun, tryCount = 3) {
+        let runCount = 0;
+        while (runCount < tryCount) {
+            try {
+                const result = await fun();
+                return result;
+            } catch (e) {
+                let errorString = (e && e.message) || String(e);
+                if (errorString.startsWith('Error: ')) errorString = errorString.replace('Error: ', '');
+                if (errorString.includes('Just a moment') || errorString.includes('重定向') ||
+                    errorString.toLowerCase().includes('404 page not found') ||
+                    errorString.toLowerCase().includes('已過期') ||
+                    errorString.toLowerCase().includes('404 not found')) throw e;
+                runCount++;
+                if (runCount === tryCount) throw e;
+            }
+        }
+    }
+
+    async function gmHttpGet(url, headers = {}) {
+        return await jhsRetry(() => new Promise((resolve, reject) => {
+            GM_xmlhttpRequest({
+                method: 'GET',
+                url: url,
+                headers: headers,
+                timeout: 5000,
+                onload: response => {
+                    try {
+                        if (response.status >= 200 && response.status < 300) {
+                            if (response.responseText) {
+                                try { resolve(JSON.parse(response.responseText)); }
+                                catch (e) { resolve(response.responseText); }
+                            } else resolve(response.responseText || response);
+                        } else {
+                            reject(new Error('请求发生错误 ' + response.status));
+                        }
+                    } catch (e) { reject(e); }
+                },
+                onerror: error => reject(new Error((error && error.error) || '网络错误')),
+                ontimeout: () => reject(new Error('请求超时: ' + url))
+            });
+        }), 3);
+    }
+
+ // 简易提示条
+    function jhsToast(msg) {
+        const t = document.createElement('div');
+        t.textContent = msg;
+        t.style.cssText = 'position:fixed;top:70px;left:50%;transform:translateX(-50%);z-index:2147483646;' +
+            'background:rgba(220,50,50,0.92);color:#fff;padding:8px 18px;border-radius:6px;font-size:14px;';
+        document.body.appendChild(t);
+        setTimeout(() => t.remove(), 3000);
+    }
+
+ // 全屏图片查看器（长缩略图）：鼠标始终为抓手，可按住自由拖动图片查看
+    function showImageViewer(imgUrlOrEl) {
+        const imgUrl = typeof imgUrlOrEl === 'string'
+            ? imgUrlOrEl
+            : (imgUrlOrEl && (imgUrlOrEl.currentSrc || imgUrlOrEl.src || imgUrlOrEl.getAttribute('src')));
+        if (!imgUrl) return;
+        const old = document.getElementById('jhs-lightbox');
+        if (old) old.remove();
+        const box = document.createElement('div');
+        box.id = 'jhs-lightbox';
+        box.innerHTML = `
+            <div class="jhs-lightbox-toolbar">
+                <button data-act="zoom-in" title="放大">＋</button>
+                <button data-act="zoom-out" title="缩小">－</button>
+                <button data-act="reset" title="重置">↺</button>
+                <button data-act="close" title="关闭 (Esc)">×</button>
+            </div>
+            <div class="jhs-lightbox-stage"><img src="${imgUrl}" alt="长缩略图" draggable="false"></div>
+        `;
+        document.head.insertAdjacentHTML('beforeend', `<style>
+            /* 抓手光标覆盖整个查看器区域（背景/舞台/图片），鼠标任何位置都显示抓手 */
+            #jhs-lightbox, #jhs-lightbox .jhs-lightbox-stage, #jhs-lightbox .jhs-lightbox-stage img { cursor: grab; }
+            #jhs-lightbox.jhs-dragging, #jhs-lightbox.jhs-dragging * { cursor: grabbing !important; user-select: none; }
+            #jhs-lightbox { position: fixed; inset: 0; z-index: 2147483645; background: rgba(0,0,0,0.92); overflow: auto; }
+            #jhs-lightbox .jhs-lightbox-stage { min-height: 100%; display: flex; align-items: center; justify-content: center; padding: 20px; box-sizing: border-box; }
+            #jhs-lightbox .jhs-lightbox-stage img { max-width: none; width: auto; height: auto; -webkit-user-drag: none; }
+            #jhs-lightbox .jhs-lightbox-toolbar { position: fixed; top: 10px; right: 16px; z-index: 1; display: flex; gap: 8px; }
+            #jhs-lightbox .jhs-lightbox-toolbar button { width: 34px; height: 34px; border: 1px solid #666; border-radius: 6px;
+                background: rgba(40,40,40,0.85); color: #eee; font-size: 17px; cursor: pointer; }
+            #jhs-lightbox .jhs-lightbox-toolbar button:hover { background: #3273dc; border-color: #3273dc; }
+        </style>`);
+        document.body.appendChild(box);
+        const prevOverflow = document.body.style.overflow;
+        document.body.style.overflow = 'hidden';
+        const img = box.querySelector('img');
+        let scale = 1;
+        // 直接以宽高渲染（transform:scale 不改变布局盒，缩放后可滚动区域与视觉错位，会导致画面"整体偏上"）
+        const setScale = (v) => {
+            scale = Math.min(Math.max(v, 0.1), 8);
+            img.style.width = Math.round((img.naturalWidth || window.innerWidth) * scale) + 'px';
+            img.style.height = Math.round((img.naturalHeight || window.innerHeight) * scale) + 'px';
+        };
+        // 初始适配：按 90% 视口等比缩小；小图保持原始高清尺寸并由容器居中
+        const fitImage = () => {
+            const vw = window.innerWidth * 0.9, vh = window.innerHeight * 0.9;
+            const w = img.naturalWidth || vw, h = img.naturalHeight || vh;
+            setScale(Math.min(1, vw / w, vh / h));
+        };
+        img.onload = fitImage;
+        if (img.complete && img.naturalWidth) fitImage();
+        const close = () => {
+            box.remove();
+            document.body.style.overflow = prevOverflow || '';
+            document.removeEventListener('keydown', onKey);
+        };
+        const onKey = (e) => { if (e.key === 'Escape') close(); };
+        document.addEventListener('keydown', onKey);
+        box.querySelector('.jhs-lightbox-toolbar').addEventListener('click', (e) => {
+            const act = e.target.getAttribute('data-act');
+            if (!act) return;
+            if (act === 'zoom-in')  setScale(scale * 1.25);
+            if (act === 'zoom-out') setScale(scale / 1.25);
+            if (act === 'reset')    fitImage();
+            if (act === 'close')    close();
+        });
+        // 滚轮缩放：在查看器任意位置都生效（不再只绑定在 img 上）
+        box.addEventListener('wheel', (e) => {
+            e.preventDefault();
+            setScale(scale * (e.deltaY < 0 ? 1.1 : 0.9));
+        }, { passive: false });
+
+        // 自由拖动查看：在整个查看器区域按下即可拖拽（图片/背景/舞台均可）。
+        // 关键修复：改为对图片施加 translate 位移（而非依赖容器 scroll）——
+        // 容器 scroll 会被内容边界钳制，无法把图拖出屏幕外；translate 无边界限制，
+        // 可像 JAV-JHS 一样任意方向自由拖动、甚至完全拖出屏幕。
+        let tx = 0, ty = 0;
+        const applyTransform = () => { img.style.transform = `translate(${tx}px, ${ty}px)`; };
+        let dragState = null;
+        let dragged = false;
+        box.addEventListener('mousedown', (e) => {
+            if (e.button !== 0) return;
+            if (e.target.closest && e.target.closest('.jhs-lightbox-toolbar')) return; // 工具条按钮不参与拖拽
+            e.preventDefault();
+            dragState = { x: e.clientX, y: e.clientY, ox: tx, oy: ty };
+            dragged = false;
+            box.classList.add('jhs-dragging');
+        });
+        window.addEventListener('mousemove', (e) => {
+            if (!dragState) return;
+            const dx = e.clientX - dragState.x, dy = e.clientY - dragState.y;
+            if (Math.abs(dx) > 3 || Math.abs(dy) > 3) dragged = true;
+            tx = dragState.ox + dx;
+            ty = dragState.oy + dy;
+            applyTransform();
+        });
+        window.addEventListener('mouseup', () => {
+            dragState = null;
+            box.classList.remove('jhs-dragging');
+        });
+        // 点击空白背景关闭（拖拽后不关闭）
+        box.addEventListener('click', (e) => {
+            if (dragged) { dragged = false; return; }
+            if (e.target === box || e.target.classList.contains('jhs-lightbox-stage')) close();
+        });
+
+        // 触屏：单指自由拖动（与鼠标一致，translate 位移，可拖出屏幕）
+        let touchState = null;
+        box.addEventListener('touchstart', (e) => {
+            if (e.touches.length !== 1) return;
+            if (e.target.closest && e.target.closest('.jhs-lightbox-toolbar')) return;
+            const t = e.touches[0];
+            touchState = { x: t.clientX, y: t.clientY, ox: tx, oy: ty };
+        }, { passive: true });
+        box.addEventListener('touchmove', (e) => {
+            if (!touchState || e.touches.length !== 1) return;
+            const t = e.touches[0];
+            tx = touchState.ox + (t.clientX - touchState.x);
+            ty = touchState.oy + (t.clientY - touchState.y);
+            applyTransform();
+            e.preventDefault();
+        }, { passive: false });
+        box.addEventListener('touchend', () => { touchState = null; });
+    }
+
+ // ---------- 长缩略图 ----------
+    const SCREENSHOT_CACHE_KEY = 'jhs_screenShot';
+
+    async function getJavStoreScreenShot(carNum) {
+        const q = carNum.toLowerCase().replace('fc2-', '');
+        const searchUrl = `https://javstore.net/search?q=${q}`;
+        const html = await gmHttpGet(searchUrl);
+        const doc = new DOMParser().parseFromString(html, 'text/html');
+        const tempCarNum = carNum.toLowerCase().replace(/fc2-(ppv-)?/g, '').replace(/-/g, '');
+        let detailPageUrl = null;
+        const itemList = doc.querySelectorAll('main .grid a');
+        for (const a of itemList) {
+            const href = a.getAttribute('href') || '';
+            if (href.toLowerCase().replace(/fc2-(ppv-)?/g, '').replaceAll('-', '').includes(tempCarNum)) {
+                detailPageUrl = new URL(href, 'https://javstore.net').href;
+                break;
+            }
+        }
+        if (!detailPageUrl) throw new Error('JavStore 查询番号失败: ' + carNum);
+        const detailHtml = await gmHttpGet(detailPageUrl);
+        const detailDoc = new DOMParser().parseFromString(detailHtml, 'text/html');
+        let imgUrl = '';
+        // 原逻辑：优先取 "CLICK HERE" 链接 href，其次取 _s.jpg 缩略图地址；再把 .th 还原为原图
+        for (const a of detailDoc.querySelectorAll('a')) {
+            if ((a.textContent || '').includes('CLICK HERE')) { imgUrl = a.getAttribute('href') || ''; break; }
+        }
+        if (!imgUrl) {
+            const sImg = detailDoc.querySelector("img[src*='_s.jpg']");
+            if (sImg) imgUrl = sImg.getAttribute('src') || '';
+        }
+        if (!imgUrl) throw new Error('JavStore 解析预览图失败: ' + carNum);
+        return imgUrl.replace('.th', '');
+    }
+
+    async function getScreenshot(carNum) {
+        carNum = (carNum || '').toUpperCase();
+        let cacheData = {};
+        try { cacheData = JSON.parse(localStorage.getItem(SCREENSHOT_CACHE_KEY) || '{}'); } catch (e) {}
+        if (cacheData[carNum]) return cacheData[carNum];
+        // 并发去重：同一番号多个入口（📏按钮/详情页块）同时请求时只发一轮 javstore 抓取
+        getScreenshot._pending = getScreenshot._pending || {};
+        if (getScreenshot._pending[carNum]) return getScreenshot._pending[carNum];
+        const task = (async () => {
+            const imgUrl = await getJavStoreScreenShot(carNum);
+            if (!imgUrl) throw new Error('未获取到缩略图地址');
+            const httpsIndex = imgUrl.indexOf('https://');
+            const finalUrl = httpsIndex !== -1 ? imgUrl.substring(httpsIndex) : imgUrl;
+            cacheData[carNum] = finalUrl;
+            localStorage.setItem(SCREENSHOT_CACHE_KEY, JSON.stringify(cacheData));
+            return finalUrl;
+        })();
+        getScreenshot._pending[carNum] = task;
+        try { return await task; } finally { delete getScreenshot._pending[carNum]; }
+    }
+
+ // 详情页：在预览区(.preview-images)首位插入长缩略图块
+    function renderScreenShotFallback(container, carNum) {
+        container.classList.add('no-click'); // 失败态不可点击（避免打开空 lightbox），仅重试/前往链接可点
+        container.innerHTML = `<div style="margin-top:50px;color:inherit;">获取缩略图失败</div><br/>
+            <a href="#" class="retry-link">点击重试</a> 或 <a href="https://javstore.net/search?q=${carNum}" target="_blank" rel="noopener">前往确认</a>`;
+        container.onclick = (e) => {
+            if (e.target.classList.contains('retry-link')) {
+                e.preventDefault();
+                loadScreenShotInto(container, carNum);
+            }
+        };
+    }
+
+    function loadScreenShotInto(container, carNum) {
+        container.classList.add('no-click'); // 加载中不可点击
+        container.onclick = null;
+        container.innerHTML = '<div style="margin-top:50px;color:inherit;cursor:auto">正在加载缩略图</div>';
+        getScreenshot(carNum).then(imgUrl => {
+            if (!imgUrl) { renderScreenShotFallback(container, carNum); return; }
+            container.classList.remove('no-click'); // 成功后恢复抓手，可点击全屏查看
+            container.innerHTML = `<img src="${imgUrl}" alt="缩略图" loading="lazy" style="width:100%;">`;
+            container.title = '点击全屏查看长缩略图';
+            container.onclick = (e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                showImageViewer(imgUrl);
+            };
+        }).catch(() => {
+            renderScreenShotFallback(container, carNum);
+        });
+    }
+
+    function loadScreenShotOnDetail() {
+        if (!config.enableLoadScreenShot) return;
+        if (!window.location.pathname.startsWith('/v/')) return;
+        if (document.querySelector('.screen-container')) return; // 幂等
+        const code = extractDetailCode();
+        if (!code) return;
+        const firstTile = document.querySelector('.preview-images .tile-item');
+        const previewImages = document.querySelector('.preview-images');
+        if (!previewImages) return;
+        const container = document.createElement('a');
+        container.className = 'tile-item screen-container';
+        container.style.cssText = 'overflow:hidden;max-height:215px;text-align:center;cursor:pointer;display:block;';
+        if (firstTile) previewImages.insertBefore(container, firstTile);
+        else previewImages.appendChild(container);
+        loadScreenShotInto(container, code);
+    }
+
+ // ---------- 更高画质预览视频 ----------
+    const DMM_VIDEO_CACHE_KEY = 'jhs_dmm_video';
+
+    async function dmmSearchContentIds(carNum) {
+        const carNumNoHyphen = carNum.replace(/-/g, '');
+        const keywordAttempts = [
+            { keyword: carNum.replace('-', '00'), name: '00-替换关键词' },
+            { keyword: carNum, name: '原始番号关键词' },
+            { keyword: carNumNoHyphen, name: '无连字符关键词' }
+        ];
+        const carNumLower = carNum.toLowerCase();
+        for (const attempt of keywordAttempts) {
+            const keyword = attempt.keyword;
+            const currentTempCarNumLower = keyword.toLowerCase();
+            const apiUrl = 'https://api.dmm.com/affiliate/v3/ItemList?' + new URLSearchParams({
+                api_id: 'UrwskPfkqQ0DuVry2gYL',
+                affiliate_id: '10278-996',
+                output: 'json',
+                site: 'FANZA',
+                sort: 'match',
+                keyword: keyword
+            }).toString();
+            let response;
+            try {
+                // gmHttpGet 已对齐 JAV-JHS：JSON 响应自动解析为对象（JAV-JHS 里即 gmHttp.get 直接返回对象）
+                response = await gmHttpGet(apiUrl);
+            } catch (e) {
+                continue; // API 请求失败，尝试下一个关键词
+            }
+            if (!response || !response.result || !response.result.result_count) continue;
+            const newItems = [];
+            for (const item of response.result.items) {
+                if (newItems.length >= 2) break;
+                const contentId = item.content_id || '', makerProduct = item.maker_product || '';
+                if (contentId.includes(currentTempCarNumLower.replace('-', '')) ||
+                    carNumLower === makerProduct.toLowerCase() ||
+                    contentId.includes(carNumNoHyphen.toLowerCase())) {
+                    newItems.push({
+                        serviceCode: item.service_code,
+                        floorCode: item.floor_code,
+                        contentId: contentId,
+                        pageUrl: item.URL
+                    });
+                }
+            }
+            if (newItems.length > 0) return newItems;
+        }
+        return null;
+    }
+
+    // 与 JAV-JHS _searchContentIds 一致：找到 Content ID 后顺带把"多结果"标记写入缓存，供封面按钮解析时参考
+    function saveDmmSiteCache(carNum, items) {
+        try {
+            const dmmCacheKey = 'jhs_other_site_dmm';
+            const dmmCacheData = localStorage.getItem(dmmCacheKey) ? JSON.parse(localStorage.getItem(dmmCacheKey)) : {};
+            let url = `https://www.dmm.co.jp/search/=/searchstr=${carNum}`, type = 'single';
+            if (items.length > 1) { type = 'multiple'; } else { url = items[0].pageUrl; }
+            dmmCacheData[carNum.toUpperCase()] = { type: type, url: url };
+            localStorage.setItem(dmmCacheKey, JSON.stringify(dmmCacheData));
+        } catch (e) {}
+    }
+
+    async function dmmExtractTrailerLinks({ contentId, serviceCode, floorCode }) {
+        const trailerPageUrl = `https://www.dmm.co.jp/service/digitalapi/-/html5_player/=/cid=${contentId}/mtype=AhRVShI_/service=${serviceCode}/floor=${floorCode}/mode=/`;
+        const htmlContent = await gmHttpGet(trailerPageUrl, {
+            'accept-language': 'ja-JP,ja;q=0.9',
+            'Cookie': 'age_check_done=1'
+        });
+        if (typeof htmlContent !== 'string') throw new Error('解析播放页内容失败, 非文本内容');
+        if (htmlContent.includes('このサービスはお住まいの地域からは')) throw new Error('节点不可用，请将DMM域名分流到日本ip');
+        const match = htmlContent.match(/const\s+args\s+=\s+(.*);/);
+        if (!match) throw new Error('未在脚本中找到 const args = ... 变量');
+        let bitrates;
+        try {
+            ({ bitrates } = JSON.parse(match[1]));
+        } catch (e) {
+            throw new Error('解析播放器脚本 JSON 失败: ' + e.message);
+        }
+        if (!Array.isArray(bitrates)) throw new Error('解析画质链接失败: bitrates 字段不是一个数组或不存在');
+        const qualityKeys = QUALITY_OPTIONS.map(o => o.quality).join('|');
+        const qualityNameRegex = new RegExp(`(${qualityKeys})\\.mp4$`);
+        const finalQualityMap = {};
+        for (const item of bitrates) {
+            const url = item && item.src;
+            if (!url || typeof url !== 'string' || !url.endsWith('.mp4')) continue;
+            const qualityMatch = url.match(qualityNameRegex);
+            const qualityKey = qualityMatch && qualityMatch[1] ? qualityMatch[1] : '';
+            if (qualityKey && !finalQualityMap[qualityKey]) finalQualityMap[qualityKey] = url;
+        }
+        if (Object.keys(finalQualityMap).length === 0) throw new Error('未找到匹配要求的预览画质视频');
+        return finalQualityMap;
+    }
+
+    async function getDmmVideo(carNum) {
+        if (!carNum) return null;
+        carNum = carNum.toUpperCase();
+        let cacheData = {};
+        try { cacheData = JSON.parse(localStorage.getItem(DMM_VIDEO_CACHE_KEY) || '{}'); } catch (e) {}
+        if (cacheData[carNum]) return cacheData[carNum];
+        // 并发去重：同一番号多个入口（详情页增强/懒钩子/封面按钮）同时请求时只发一轮网络解析
+        if (getDmmVideo._pending && getDmmVideo._pending[carNum]) return getDmmVideo._pending[carNum];
+        const lower = carNum.toLowerCase();
+ // 无码 / VR 类型不做 DMM 解析
+        if (lower.startsWith('heyzo') || /^n\d+$/.test(lower) || /^\d+(-\d+)*$/.test(lower)) return null;
+        if (carNum.includes('VR-')) return null;
+        const task = (async () => {
+            let contentItems;
+            try {
+                contentItems = await dmmSearchContentIds(carNum);
+            } catch (e) {
+                return null;
+            }
+            if (!contentItems || contentItems.length === 0) {
+                // DMM Affiliate API 偶发瞬时失败返回空结果（JAV-JHS 靠 3 次快速重试消化这种抖动）。
+                // 自研的整链二轮重试会把 3 组关键词 × 3 次请求全部跑满，首次进详情页要等很久——已删除。
+                return null;
+            }
+            saveDmmSiteCache(carNum, contentItems);
+            try {
+                // 与 JAV-JHS fetchVideo 一致：两个候选 contentId 并行竞速解析，取最先成功者
+                const finalVideoMap = await Promise.any(contentItems.map(item => dmmExtractTrailerLinks(item)));
+                cacheData[carNum] = finalVideoMap;
+                localStorage.setItem(DMM_VIDEO_CACHE_KEY, JSON.stringify(cacheData));
+                return finalVideoMap;
+            } catch (error) {
+                const errors = (error && error.errors) || [error];
+                if (errors.some(err => err && err.message && err.message.includes('节点不可用'))) {
+                    console.warn('[JavDB增强助手] DMM节点不可用，请将DMM域名分流到日本IP');
+                }
+                return null;
+            }
+        })();
+        getDmmVideo._pending = getDmmVideo._pending || {};
+        getDmmVideo._pending[carNum] = task;
+        try { return await task; } finally { delete getDmmVideo._pending[carNum]; }
+    }
+
+ // 详情页增强：替换/创建预告片源并渲染画质切换按钮
+    let enhancePreviewVideoRunning = false;
+    async function enhancePreviewVideo() {
+        if (!config.enableLoadPreviewVideo) return;
+        if (!window.location.pathname.startsWith('/v/')) return;
+        if (enhancePreviewVideoRunning) return;
+        enhancePreviewVideoRunning = true;
+        try {
+            const code = extractDetailCode();
+            if (!code) return;
+            const dmmVideoMap = await getDmmVideo(code);
+            if (!dmmVideoMap) return;
+            const defaultQuality = selectDefaultQuality(Object.keys(dmmVideoMap), config.videoQuality);
+            const defaultVideoUrl = dmmVideoMap[defaultQuality];
+            if (!defaultVideoUrl) return;
+
+            // 【修复切换画质抓包看不到目标地址·根因】JavDB 详情页预告片播放器经 fancybox
+            // 模态层打开时，DOM 中会同时存在多个 id="preview-video" 的节点（页面隐藏的原生
+            // 节点 + .fancybox-content 内真正在播的节点）。document.querySelector 永远返回
+            // DOM 顺序靠前的第一个——即页面里那个看不见的隐藏节点。此前 enhancePreviewVideo、
+            // 懒钩子、bindQualityButtons 全部用单查，换 src/load/play 都作用在隐藏节点上，
+            // fancybox 内真正播放的元素始终停留在原生默认流——这就是"高亮变了、抓包里连
+            // 720p(hmb.mp4) 请求都没有"的直接原因。现统一改用 pickJhsLiveVideo()：
+            // ①正在播放且有 src 的 → ②位于 .fancybox-content 内的 → ③已打开的 → ④第一个。
+            const videoEl = pickJhsLiveVideo();
+            if (videoEl) {
+                // 【逐行对齐 JAV-JHS initDmm + 防死循环】
+                // JAV-JHS 原版是无条件 attr('src')+（可见时）play()，但它只在页面初始化执行一次；
+                // 本脚本由 MutationObserver 节流反复触发 enhancePreviewVideo，若沿用"无条件换源"，
+                // 一旦 DMM API 两次解析返回不同时效的地址，就会每 800ms 强制重新拉流一次，
+                // 表现为"预览视频永远在缓冲/加载卡顿"。因此仅在地址不同时才换源+load，
+                // 其余时序（记录进度→换src→load→恢复进度→play）与 JAV-JHS handleVideo 逐行一致。
+                const curAttr = videoEl.getAttribute('src') || '';
+                const sameSrc = curAttr === defaultVideoUrl || (videoEl.currentSrc && videoEl.currentSrc === defaultVideoUrl);
+                const wasVisible = videoEl.offsetParent !== null;
+                if (!sameSrc) {
+                    const currentTime = videoEl.currentTime || 0;
+                    videoEl.setAttribute('src', defaultVideoUrl);
+                    if (wasVisible) {
+                        videoEl.load();
+                        videoEl.currentTime = currentTime;
+                        playJhsVideoSafely(videoEl);
+                    }
+                }
+                videoEl.dataset.jhsEnhanced = '1';
+                videoEl._jhsDmmMap = dmmVideoMap;
+                videoEl._jhsDefaultQuality = defaultQuality;
+                // 播放器已可见时（用户在异步增强完成前就点开了预告片）：补挂/复用工具条。
+                // 【修复画质按钮点了没反应】关键根因：JavDB 原生详情页【没有】#preview-video，
+                // 点击"预告片"入口后 fancybox 会把隐藏的视频节点搬进 .fancybox-content 模态层，
+                // 而此前 bindQualityButtons 用 offsetParent===null 判断"可见"——被搬走的节点在
+                // fancybox 动画期间 offsetParent 为 null，工具条永远渲染不出来（或渲染在看不见的
+                // 原位置），表现就是"无法切换画质/按钮无反应"。现对齐 JAV-JHS：只要视频处于播放
+                // 状态即视为播放器已打开，并把工具条挂到视频所在容器（.fancybox-content）内。
+                if (wasVisible || !videoEl.paused) {
+                    applyJhsMutedPreference(videoEl);
+                    if (!videoEl.paused) playJhsVideoSafely(videoEl);
+                    showPreviewToolbar(videoEl);
+                }
+            } else {
+ // JavDB 详情页没有内嵌 video 时：在预览区创建 预告片容器 + video
+                const previewImages = document.querySelector('.preview-images');
+                if (!previewImages) return;
+                if (!document.querySelector('.preview-video-container')) {
+                    const coverImg = document.querySelector('.column-video-cover img');
+                    const poster = coverImg ? coverImg.getAttribute('src') : '';
+                    const container = document.createElement('a');
+                    container.className = 'preview-video-container';
+                    container.href = 'javascript:;';
+                    container.innerHTML = `<span>预告片</span><img src="${poster}" class="video-cover" style="width:150px;height:auto;" alt="">`;
+                    previewImages.prepend(container);
+                    const v = document.createElement('video');
+                    v.id = 'preview-video';
+                    v.setAttribute('playsinline', '');
+                    v.setAttribute('controls', '');
+                    // 不写 muted 属性：创建即静音会被 Chromium 随手势锁存媒体策略；
+                    // 声音状态由点击"预告片"打开播放器时的 applyJhsMutedPreference(v) 决定（默认有声）
+                    v.preload = 'auto';
+                    v.loop = true;
+                    v.style.display = 'none';
+                    v.src = defaultVideoUrl;
+                    v.dataset.jhsEnhanced = '1';
+                    v._jhsDmmMap = dmmVideoMap;
+                    v._jhsDefaultQuality = defaultQuality;
+                    container.after(v);
+                    container.addEventListener('click', (e) => {
+                        e.preventDefault();
+                        if (v.style.display === 'none') {
+                            v.style.display = 'block';
+                            applyJhsMutedPreference(v); // 默认解除禁音（跟随用户记忆偏好）
+                            playJhsVideoSafely(v);
+                            showPreviewToolbar(v); // 打开播放器时才渲染画质工具条（对齐 JAV-JHS handleVideo）
+                        } else {
+                            v.style.display = 'none';
+                            v.pause();
+                        }
+                    });
+                }
+            }
+        } finally {
+            enhancePreviewVideoRunning = false;
+        }
+    }
+
+    // 静音偏好记忆（localStorage jhs_videoMuted，与 JAV-JHS 同键）：无记录时默认解除禁音
+    function applyJhsMutedPreference(videoEl) {
+        const pref = localStorage.getItem('jhs_videoMuted');
+        videoEl.muted = pref ? ('yes' === pref) : false;
+        if (!videoEl.muted && !videoEl.volume) videoEl.volume = 1; // 防止 volume=0 导致"解除禁音仍无声"
+        if (!videoEl._jhsVolumeBound) {
+            videoEl._jhsVolumeBound = true;
+            videoEl.addEventListener('volumechange', () => {
+                localStorage.setItem('jhs_videoMuted', videoEl.muted ? 'yes' : 'no');
+            });
+        }
+    }
+
+    // 原生 #preview-video 的懒加载增强：JavDB 原生预告片入口被点击、播放器真正打开后，
+    // 再替换 DMM 高画质源并渲染画质工具条——保证工具条只出现在视频播放器下方
+    function ensureNativePreviewHook() {
+        if (ensureNativePreviewHook._bound) return;
+        ensureNativePreviewHook._bound = true;
+        document.addEventListener('click', (e) => {
+            if (!config.enableLoadPreviewVideo) return;
+            if (!window.location.pathname.startsWith('/v/')) return;
+            const link = e.target.closest && e.target.closest('a[href*="#preview-video"], .preview-video-container');
+            if (!link) return;
+            // 【修复切换画质抓包看不到目标地址】手势时刻记录播放意图：点击时视频正在播放，
+            // 说明这次是"暂停"手势（原生 controls/入口会自行暂停），脚本后续绝不补 play()。
+            const gestureVideo = pickJhsLiveVideo();
+            const wasPlayingAtGesture = !!(gestureVideo && !gestureVideo.paused);
+            setTimeout(async () => {
+                let videoEl = pickJhsLiveVideo(); // 多节点场景优先 fancybox 内真正在播的元素
+                if (!videoEl) return;
+                // 【修复 cb158f5 回归：无法暂停视频】手势时刻检测播放意图：
+                // JavDB 原生预告片入口点击本身会切换播放/暂停——若此刻视频正在播放，
+                // 说明这次点击是"暂停"手势，脚本绝不能再补 play() 把它弹回播放。
+                // （以手势时刻的判定为准，异步期间 fancybox 可能已重建节点）
+                applyJhsMutedPreference(videoEl);
+                // 【修复画质切换后播放的仍是旧画质·根因】此前这里无条件 play()：JavDB 原生预告片
+                // 入口点击本身会切换播放/暂停，若脚本把"从未被增强的原生 JavDB 预览视频"也强制
+                // 播起来，enhancePreviewVideo 的节流重入与 fancybox 时序竞争下会出现——画面实际
+                // 播放的是原生 src，而工具条按钮数据来自 DMM map；点画质按钮时 target 现查到的
+                // 节点虽换了 DMM src，但 fancybox 内真正在渲染的媒体元素仍停在原生流上（表现为
+                // "高亮变了、画质没变"）。现在未增强前不抢跑 play()，等 DMM 地址就绪、换源完成后
+                // 再统一续播，保证"正在播的一定是 DMM 源"。
+                if (videoEl.dataset.jhsEnhanced === '1') {
+                    if (!wasPlayingAtGesture) playJhsVideoSafely(videoEl);
+                    // 已增强过：播放器重新打开时补挂工具条（不再换源，保持加载速度修复）
+                    if (isJhsPlayerOpened(videoEl)) showPreviewToolbar(videoEl);
+                    return;
+                }
+                const code = extractDetailCode();
+                if (!code) return;
+                // 【修复画质按钮点击无反应】懒钩子与静默 enhancePreviewVideo 并发解析同一番号时，
+                // 两侧先后各自渲染工具条，后一侧 remove+重建销毁了前一侧刚绑定的委托监听节点，
+                // 表现为"按钮在、点了没反应"。现加并发锁：另一侧正在解析时本路径直接跳过，
+                // 工具条统一由持有锁的一侧渲染（enhancePreviewVideo 的 finally 释放锁）。
+                if (getDmmVideo._pending && getDmmVideo._pending[code.toUpperCase()]) {
+                    if (isJhsPlayerOpened(videoEl)) showPreviewToolbar(videoEl);
+                    return;
+                }
+                const dmmVideoMap = await getDmmVideo(code);
+                if (!dmmVideoMap) return;
+                // 异步解析期间 fancybox 可能已重建播放器节点，重新获取最新引用（对齐 JAV-JHS handleVideo 每次现查）
+                videoEl = pickJhsLiveVideo();
+                if (!videoEl) return;
+                const defaultQuality = selectDefaultQuality(Object.keys(dmmVideoMap), config.videoQuality);
+                const defaultVideoUrl = dmmVideoMap[defaultQuality];
+                if (!defaultVideoUrl) return;
+                videoEl.dataset.jhsEnhanced = '1';
+                videoEl._jhsDmmMap = dmmVideoMap;
+                videoEl._jhsDefaultQuality = defaultQuality;
+                applyJhsMutedPreference(videoEl);
+                // 与 JAV-JHS handleVideo 逐行一致：src 不同才换源+load()+play()；
+                // 若静默增强已把 src 换成同一默认地址，这里不再重复 load()——
+                // 此前无条件 load() 会把刚缓冲好的视频强制重新拉流（加载卡顿的根因之一），
+                // 且重挂工具条前移除旧工具条，保证按钮数据始终来自最新 map
+                if (videoEl.getAttribute('src') !== defaultVideoUrl) {
+                    videoEl.setAttribute('src', defaultVideoUrl);
+                    videoEl.load();
+                }
+                // 【修复 cb158f5 回归】同手势意图：用户本次点击若是"暂停"手势则不强制续播
+                if (!wasPlayingAtGesture) playJhsVideoSafely(videoEl);
+                // 【修复画质按钮点了没反应】可见性判定改用 isJhsPlayerOpened（兼容 fancybox 模态层）
+                showPreviewToolbar(videoEl);
+            }, 300);
+        }, true);
+    }
+
+    // 播放器打开后才渲染工具条。
+    // 【修复画质按钮点了没反应】"已打开"的判定不再使用 offsetParent（JavDB 原生预告片经 fancybox
+    // 把视频节点搬进模态层，动画期间 offsetParent 为 null，导致工具条永远不渲染）——对齐 JAV-JHS：
+    // 只要视频正在播放、或已位于 .fancybox-content 内、或正常可见，即视为播放器已打开。
+    // 【修复 AbortError: The play() request was interrupted by a new load request】
+    // load() 会使上一次未完成的 play() Promise 以 AbortError 拒绝；此前各处
+    // videoEl.play().catch(() => {}) 中 .catch() 的返回值被丢弃，部分 Chromium/Tampermonkey
+    // 环境仍将其上报为 Uncaught (in promise)。统一改为 void 吞掉 rejection。
+    function playJhsVideoSafely(videoEl) {
+        if (!videoEl || typeof videoEl.play !== 'function') return Promise.resolve();
+        try {
+            const p = videoEl.play();
+            if (p && typeof p.catch === 'function') return p.catch(() => {});
+        } catch (e) { /* 同步异常同样忽略 */ }
+        return Promise.resolve();
+    }
+
+    function isJhsPlayerOpened(videoEl) {
+        if (!videoEl) return false;
+        if (!videoEl.paused || videoEl.currentTime > 0) return true;
+        if (videoEl.closest && videoEl.closest('.fancybox-content')) return true;
+        return videoEl.offsetParent !== null;
+    }
+
+    // 【修复切换画质抓包看不到目标地址·核心】收集所有 id="preview-video" 节点并选出
+    // "真正在播的那一个"。JavDB 详情页经 fancybox 打开预告片后，DOM 中会同时存在页面里
+    // 隐藏的 #preview-video 与 .fancybox-content 内可见的两个同 id 节点；querySelector
+    // 单查永远返回靠前的隐藏节点，导致换源/load/play 全部打在看不见的元素上（表现为
+    // 高亮变了、实际播放的仍是原画质，抓包里连目标 hmb.mp4 请求都没有）。
+    function pickJhsLiveVideo() {
+        const list = Array.from(document.querySelectorAll('#preview-video'));
+        if (!list.length) return null;
+        return list.find(v => !v.paused && v.getAttribute('src'))
+            || list.find(v => v.closest && v.closest('.fancybox-content'))
+            || list.find(v => isJhsPlayerOpened(v))
+            || list[0];
+    }
+    function showPreviewToolbar(videoEl) {
+        const map = videoEl && videoEl._jhsDmmMap;
+        if (!map) return;
+        if (!isJhsPlayerOpened(videoEl)) return; // 播放器未打开时不渲染
+        injectVideoToolbarStyles();
+        bindQualityButtons(videoEl, map, videoEl._jhsDefaultQuality);
+    }
+
+    // 画质切换/工具条统一样式 + 长缩略图状态样式：独立注入（对齐 JAV-JHS mainCss 全局注入方式，
+    // 保证首次进入详情页、未经过弹窗流程时按钮样式也完整生效）
+    function injectVideoToolbarStyles() {
+        if (document.getElementById('jhs-video-toolbar-style')) return;
+        const style = document.createElement('style');
+        style.id = 'jhs-video-toolbar-style';
+        style.textContent = `
+            /* 长缩略图加载中/失败状态不响应点击，避免打开空 lightbox */
+            .screen-container.no-click { cursor: default; pointer-events: none; }
+            .screen-container.no-click a { pointer-events: auto; }
+            #video-bottom-toolbar .video-control-btn { min-width:120px; padding: 7px 12px; font-size: 12px; background: rgba(0,0,0,0.7); color: white; border: none; border-radius: 4px; cursor: pointer; }
+            #video-bottom-toolbar .video-control-btn.active { background-color: #1890ff; color: white; font-weight: bold; border: 2px solid #096dd9; }
+        `;
+        document.head.appendChild(style);
+    }
+
+ // 在 video 所在容器底部渲染画质切换按钮组（工具条只跟随视频播放器，绝不插入图片预览网格）
+    function bindQualityButtons(videoEl, dmmVideoMap, defaultQuality) {
+        let parent = videoEl.parentElement;
+        if (!parent) return;
+        // 防御：若 video 直接位于图片网格(.preview-images)内，把它移出到网格之后的独立包裹层，
+        // 避免工具条混入图像预览（这是此前"工具条出现在图像预览旁"的根因）
+        if (parent.classList && parent.classList.contains('preview-images')) {
+            let wrap = parent.parentElement && parent.parentElement.querySelector('.jhs-video-wrap');
+            if (!wrap) {
+                wrap = document.createElement('div');
+                wrap.className = 'jhs-video-wrap';
+                wrap.style.cssText = 'clear:both;margin-top:8px;position:relative;';
+                parent.insertAdjacentElement('afterend', wrap);
+            }
+            wrap.appendChild(videoEl);
+            videoEl.style.width = '100%';
+            videoEl.style.maxHeight = '70vh';
+            parent = wrap;
+        }
+        // 【修复画质按钮点了没反应】幂等策略升级：已存在工具条且其数据与当前 map/默认画质
+        // 一致时直接复用（监听完好、不销毁重建）；仅当数据不一致时才 remove+重建。
+        // 此前"remove 旧工具条再重建"会在懒钩子/静默增强并发时销毁刚绑定的委托监听，
+        // 导致按钮渲染出来了但点了没反应。
+        const existingToolbar = parent.querySelector(':scope > #video-bottom-toolbar');
+        if (existingToolbar) {
+            if (existingToolbar.dataset.jhsQuality === (videoEl._jhsDefaultQuality || defaultQuality)) return; // 数据一致，复用
+            existingToolbar.remove(); // 数据不一致才重建
+        }
+        // 【修复画质切换无效·根因1】清理挂在【其它 video 容器】上的同名旧工具条——JavDB 原生预告片
+        // 走 fancybox 模态层，视频节点会被搬进 .fancybox-content；若此前工具条挂在页面原位置的父容器
+        // （或上一代 video 节点）上，用户看到并点击的其实是那个"游离"的旧工具条：它的闭包持有的是
+        // 页面里的隐藏 video 引用，改 src/load/play 全部作用在看不见的元素上——这就是"高亮变了、
+        // 播放的画质没变"的直接原因。
+        document.querySelectorAll('#video-bottom-toolbar').forEach(tb => {
+            if (tb !== existingToolbar && !parent.contains(tb)) tb.remove();
+        });
+        parent.style.position = 'relative';
+        const toolbar = document.createElement('div');
+        toolbar.id = 'video-bottom-toolbar';
+        toolbar.dataset.jhsQuality = videoEl._jhsDefaultQuality || defaultQuality || '';
+        toolbar.style.cssText = 'display:flex;gap:5px;align-items:center;flex-wrap:wrap;margin-top:6px;';
+        const group = document.createElement('div');
+        group.style.cssText = 'display:flex;gap:5px;align-items:center;flex-wrap:wrap;';
+        QUALITY_OPTIONS.forEach(option => {
+            const url = dmmVideoMap[option.quality];
+            if (!url) return;
+            const isActive = defaultQuality === option.quality;
+            const btn = document.createElement('button');
+            btn.className = 'video-control-btn' + (isActive ? ' active' : '');
+            btn.dataset.quality = option.quality;
+            btn.dataset.videoSrc = url;
+            btn.textContent = option.text;
+            // 不写内联颜色：样式统一交给注入 CSS（.video-control-btn/.active），
+            // 之前内联样式导致切换后视觉状态错乱（看起来"没有真实切换"）
+            group.appendChild(btn);
+        });
+        toolbar.appendChild(group);
+        parent.appendChild(toolbar);
+        group.addEventListener('click', async (e) => {
+            const btn = e.target.closest('.video-control-btn');
+            if (!btn || btn.classList.contains('active')) return;
+            try {
+                // 【逐字照搬 JAV-JHS handleVideo 的画质切换监听（源码2705-2724行）】
+                // const currentTime = videoEl.currentTime;
+                // $videoEl.attr("src", videoSrc);   ← 注意：JAV-JHS 作用于【同一个】videoEl 引用
+                // videoEl.load();
+                // videoEl.currentTime = currentTime;
+                // await videoEl.play();
+                // ——它从不重新查找元素；而我此前几版自创的"现查 #preview-video / fancybox 内
+                // 找 paused=false 的 live 元素再重放换源"逻辑是元凶：fancybox 里 video 元素
+                // 带 loop 属性，缓冲新片源期间 paused 恒为 false，导致重放分支命中并再次
+                // load()，把刚设好的目标画质反复打断回退——抓包看不到 720p 请求即由此而来。
+                // 现彻底删除该自创逻辑，严格对齐原版。
+                const currentTime = videoEl.currentTime;
+                // 【修复 AbortError】若上一次 play() 的 Promise 仍在途（缓冲中），
+                // 直接 load() 会使其以 AbortError 拒绝——先 pause() 让其在途状态结束。
+                if (!videoEl.paused) { try { videoEl.pause(); } catch (e) {} }
+                videoEl.setAttribute('src', btn.dataset.videoSrc);
+                videoEl.load();
+                videoEl.currentTime = currentTime;
+                await playJhsVideoSafely(videoEl);
+                group.querySelectorAll('.video-control-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                videoEl._jhsDefaultQuality = btn.dataset.quality;
+            } catch (err) {
+                console.error('切换画质失败:', err);
+            }
+        });
+    }
+
+ // ---------- 封面快捷按钮：长缩略图 / 预览视频 ----------
+    const COVER_SCREEN_SVG = '<svg t="1750691468062" class="jhs-icon icon" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg" width="200" height="200"><path d="M288 160a64 64 0 0 0-64 64v576a64 64 0 0 0 64 64h448a64 64 0 0 0 64-64v-576a64 64 0 0 0-64-64h-448m0-64h448a128 128 0 0 1 128 128v576a128 128 0 0 1-128 128h-448a128 128 0 0 1-128-128v-576a128 128 0 0 1 128-128z" fill="#4078FD"></path><path d="M416 352m-64 0a64 64 0 1 0 128 0 64 64 0 1 0-128 0Z" fill="#FE9C23"></path><path d="M352 732.448a32 32 0 0 1-32-32v-160a32 32 0 0 1 44.224-29.568l130.112 53.632 153.952-169.984a32 32 0 0 1 55.712 21.472v284.448a32 32 0 0 1-32 32z m0-32h320z" fill="#4078FD" opacity=".2"></path><path d="M672 416l-169.088 186.656-150.912-62.208v160h320V416m0-32a32 32 0 0 1 32 32v284.448a32 32 0 0 1-32 32h-320a32 32 0 0 1-32-32v-160a32 32 0 0 1 44.192-29.6l130.112 53.632 153.984-169.984a32 32 0 0 1 23.712-10.496z" fill="#4078FD"></path></svg>';
+    const COVER_VIDEO_SVG = '<svg t="1749003664455" class="jhs-icon icon" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg" width="200" height="200"><path d="M825.6 153.6H198.4C124.5 153.6 64 214.1 64 288v448c0 73.9 60.5 134.4 134.4 134.4h627.2c73.9 0 134.4-60.5 134.4-134.4V288c0-73.9-60.5-134.4-134.4-134.4z m-138.2 44.8l112 112H706l-112-112h93.4z m-156.8 0l112 112H526.7l-112-112h115.9z m-179.2 0l112 112H347.5l-112-112h115.9zM108.8 288c0-41.4 28.4-76.1 66.7-86.3l108.7 108.7H108.8V288z m806.4 448c0 49.4-40.2 89.6-89.6 89.6H198.4c-49.4 0-89.6-40.2-89.6-89.6V355.2h806.4V736z m0-425.6h-52.5l-112-112h74.9c49.4 0 89.6 40.2 89.6 89.6v22.4z"></path><path d="M454 687.2l149.3-77.6c27.5-13.8 27.5-53 0-66.8L468 472.2c-31.2-15.6-68 7.1-68 42v139.6c0 27.8 29.2 45.8 54 33.4zM444.8 512l134.4 67.2-134.4 67.2V512z"></path></svg>';
+    const COVER_RECOVERY_VIDEO_SVG = '<svg class="jhs-icon icon" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg" width="200" height="200"><path d="M938.666667 553.92V768c0 64.8-52.533333 117.333333-117.333334 117.333333H202.666667c-64.8 0-117.333333-52.533333-117.333334-117.333333V256c0-64.8 52.533333-117.333333 117.333334-117.333333h618.666666c64.8 0 117.333333 52.533333 117.333334 117.333333v297.92z m-64-74.624V256a53.333333 53.333333 0 0 0-53.333334-53.333333H202.666667a53.333333 53.333333 0 0 0-53.333334 53.333333v344.48A290.090667 290.090667 0 0 1 192 597.333333a286.88 286.88 0 0 1 183.296 65.845334C427.029333 528.384 556.906667 437.333333 704 437.333333c65.706667 0 126.997333 16.778667 170.666667 41.962667z m0 82.24c-5.333333-8.32-21.130667-21.653333-43.648-32.917333C796.768 511.488 753.045333 501.333333 704 501.333333c-121.770667 0-229.130667 76.266667-270.432 188.693334-2.730667 7.445333-7.402667 20.32-13.994667 38.581333-7.68 21.301333-34.453333 28.106667-51.370666 13.056-16.437333-14.634667-28.554667-25.066667-36.138667-31.146667A222.890667 222.890667 0 0 0 192 661.333333c-14.464 0-28.725333 1.365333-42.666667 4.053334V768a53.333333 53.333333 0 0 0 53.333334 53.333333h618.666666a53.333333 53.333333 0 0 0 53.333334-53.333333V561.525333zM320 480a96 96 0 1 1 0-192 96 96 0 0 1 0 192z m0-64a32 32 0 1 0 0-64 32 32 0 0 0 0 64z" fill="#000000"></path></svg>';
+
+    // 列表页每个 item 的 tags 行尾部追加 tool-box（📏长缩略图 + ▶预览视频），受各自开关控制
+    // 样式对齐 CoverButtonPlugin：.tool-box span 默认 opacity .3，悬停变 1；SVG 路径蓝色/暗色白色
+    function addCoverQuickButtons() {
+        if (!config.enableScreenSvg && !config.enableVideoSvg) return;
+        // 关键修复：样式必须在创建按钮前注入（且独立于弹窗样式）。
+        // 此前 svg 内联 fill="#4078FD"（浅色主题配色）+ 覆盖 CSS 只在第一次弹窗时才注入，
+        // 导致刷新后暗色主题下按钮仍是浅色配色；同时剥离内联 fill，让 CSS 完全接管颜色。
+        injectCoverButtonStyles();
+        document.querySelectorAll('.movie-list .item').forEach(item => {
+            if (item.querySelector('.jhs-tool-box')) return; // 幂等
+            const tagsRow = item.querySelector('.tags');
+            if (!tagsRow) return;
+            const toolBox = document.createElement('div');
+            toolBox.className = 'tool-box jhs-tool-box';
+            toolBox.style.cssText = 'margin-left:auto;display:flex;align-items:center;';
+            if (config.enableScreenSvg) {
+                const screenBtn = document.createElement('span');
+                screenBtn.className = 'screenSvg';
+                screenBtn.title = '长缩略图';
+                // 对齐 JAV-JHS：内联仅 margin-right:15px，尺寸/透明度由注入 CSS（.jhs-icon / .jhs-tool-box span）控制
+                screenBtn.style.cssText = 'margin-right:15px;cursor:pointer;';
+                screenBtn.innerHTML = COVER_SCREEN_SVG;
+                toolBox.appendChild(screenBtn);
+            }
+            if (config.enableVideoSvg) {
+                const videoBtn = document.createElement('span');
+                videoBtn.className = 'videoSvg';
+                videoBtn.title = '播放预览视频';
+                videoBtn.dataset.state = 'idle';
+                videoBtn.style.cssText = 'margin-right:15px;cursor:pointer;';
+                videoBtn.innerHTML = COVER_VIDEO_SVG;
+                toolBox.appendChild(videoBtn);
+            }
+            tagsRow.appendChild(toolBox);
+        });
+    }
+
+    // 快捷按钮行为：一次性 document 委托绑定（动态追加的按钮天然生效）
+    function bindCoverQuickButtonEvents() {
+        if (bindCoverQuickButtonEvents._bound) return;
+        bindCoverQuickButtonEvents._bound = true;
+
+        // 📏 长缩略图：取该卡片番号 → getScreenshot → lightbox 全屏查看
+        document.addEventListener('click', async (e) => {
+            const btn = e.target.closest && e.target.closest('.jhs-tool-box .screenSvg');
+            if (!btn) return;
+            e.preventDefault();
+            e.stopPropagation();
+            if (bindCoverQuickButtonEvents._screenLoading) return; // 防连点重复请求
+            const item = btn.closest('.movie-list .item');
+            if (!item) return;
+            let code = extractItemCode(item);
+            if (!code) return;
+            code = code.replace('FC2-', '');
+            bindCoverQuickButtonEvents._screenLoading = true;
+            const prevHtml = btn.innerHTML;
+            btn.style.opacity = '1';
+            btn.title = '加载中...';
+            try {
+                const imgUrl = await getScreenshot(code);
+                showImageViewer(imgUrl);
+            } catch (err) {
+                jhsToast('长缩略图获取失败: ' + (err.message || err));
+            } finally {
+                bindCoverQuickButtonEvents._screenLoading = false;
+                btn.style.opacity = '';
+                btn.title = '长缩略图';
+                btn.innerHTML = prevHtml;
+            }
+        });
+
+        // ▶ 预览视频：就地覆盖 <video> 播放 DMM 高画质预告片；再点切回封面。同时只允许一个在播
+        document.addEventListener('click', async (e) => {
+            const btn = e.target.closest && e.target.closest('.jhs-tool-box .videoSvg');
+            if (!btn) return;
+            e.preventDefault();
+            e.stopPropagation();
+            const item = btn.closest('.movie-list .item');
+            if (!item) return;
+
+ // 先把其它正在播放的卡片恢复成封面状态
+            document.querySelectorAll('.videoSvg[data-state="playing"]').forEach(otherBtn => {
+                if (otherBtn === btn) return;
+                const otherItem = otherBtn.closest('.movie-list .item');
+                const otherCode = extractItemCode(otherItem);
+                const otherVideo = otherItem.querySelector('#' + CSS.escape(otherCode + '_preview_video'));
+                if (otherVideo) { otherVideo.pause(); otherVideo.parentElement.remove(); }
+                const otherImg = otherItem.querySelector('.cover img');
+                if (otherImg) otherImg.style.display = '';
+                otherBtn.innerHTML = COVER_VIDEO_SVG;
+                otherBtn.title = '播放预览视频';
+                otherBtn.dataset.state = 'idle';
+            });
+
+            const code = extractItemCode(item);
+            if (!code) return;
+            if (bindCoverQuickButtonEvents._videoLoading && bindCoverQuickButtonEvents._videoLoading === code) return; // 同番号防连点
+            const img = item.querySelector('.cover img');
+            if (!img) { jhsToast('没有找到封面图片'); return; }
+            const videoId = `${code}_preview_video`;
+            let videoEl = item.querySelector('#' + CSS.escape(videoId));
+
+            if (btn.dataset.state === 'playing' && videoEl) {
+                // 切回封面
+                videoEl.pause();
+                videoEl.parentElement.remove();
+                img.style.display = '';
+                btn.innerHTML = COVER_VIDEO_SVG;
+                btn.title = '播放预览视频';
+                btn.dataset.state = 'idle';
+                return;
+            }
+
+            if (videoEl) {
+                // 已有缓存的视频节点：直接复用播放
+                videoEl.parentElement.style.display = '';
+                applyJhsMutedPreference(videoEl); // 默认有声（跟随记忆偏好），对齐 JAV-JHS showVideo
+                playJhsVideoSafely(videoEl);
+                img.style.display = 'none';
+                btn.innerHTML = COVER_RECOVERY_VIDEO_SVG;
+                btn.title = '切回封面';
+                btn.dataset.state = 'playing';
+                return;
+            }
+
+            const poster = img.currentSrc || img.src;
+            // 关键修复：逐行照搬 JAV-JHS CoverButtonPlugin.showVideo——先 await getDmmVideo 拿到地址，
+            // 再创建【带 src、无 muted 属性】的 <video>，随后同步执行 load() → muted=false → play()。
+            // （此前自创的"手势内先建空 src 占位、解析完再替换 src"方案是错的：空 src 元素在浏览器
+            // 自动播放策略中不占用媒体授权槽位，随后异步换 src 播放时已脱离手势，被强制降级为静音——
+            // 这正是"封面快捷按钮播放预览视频依旧默认禁音"的真正根因；JAV-JHS 原版实测正常即因为此顺序）
+            bindCoverQuickButtonEvents._videoLoading = code;
+            btn.title = '解析中...';
+            let dmmVideoMap = null;
+            try {
+                dmmVideoMap = await getDmmVideo(code);
+            } finally {
+                bindCoverQuickButtonEvents._videoLoading = null;
+            }
+            if (!dmmVideoMap) {
+                jhsToast('未解析到视频');
+                btn.dataset.state = 'idle';
+                btn.title = '播放预览视频';
+                return;
+            }
+            const quality = selectDefaultQuality(Object.keys(dmmVideoMap), config.videoQuality);
+            const videoUrl = dmmVideoMap[quality];
+            if (!videoUrl) {
+                jhsToast('未解析到视频');
+                btn.dataset.state = 'idle';
+                btn.title = '播放预览视频';
+                return;
+            }
+            const cover = item.querySelector('.cover') || img.parentElement;
+            if (!cover || !cover.isConnected) return;
+            if (getComputedStyle(cover).position === 'static') cover.style.position = 'relative';
+            const wrap = document.createElement('div');
+            wrap.className = 'jhs-cover-video-wrap';
+            wrap.style.cssText = 'display:flex;justify-content:center;align-items:center;position:absolute;top:0;left:0;height:100%;width:100%;z-index:10;overflow:hidden;background:#000;';
+            // HTML 上不写 muted（对齐 JAV-JHS showVideo 的 videoHtml），声音状态由下面的 JS 赋值决定
+            wrap.innerHTML = `<video src="${videoUrl}" poster="${poster}" id="${videoId}" controls loop playsinline
+                style="max-height:100%;max-width:100%;object-fit:contain"></video>`;
+            cover.appendChild(wrap);
+            img.style.display = 'none';
+            btn.innerHTML = COVER_RECOVERY_VIDEO_SVG;
+            btn.title = '切回封面';
+            btn.dataset.state = 'playing';
+            const v = wrap.querySelector('video');
+            v._jhsDmmMap = dmmVideoMap; // 供后续扩展（画质映射）使用
+            // 与 JAV-JHS showVideo 结尾三行一致：load() → muted=false（记忆偏好）→ play()
+            v.load();
+            applyJhsMutedPreference(v);
+            playJhsVideoSafely(v);
+        });
     }
 
     // CSS样式注入（根据配置动态生成）
@@ -4589,6 +5600,24 @@
             if (config.hoverBigImg) {
                 initHoverBigImg();
             }
+            // 🚀 详情页长缩略图 / 更高画质预览视频 / 封面快捷按钮（均幂等）
+            // 【修复页面卡死】此前直接挂在 MutationObserver 回调里：enhancePreviewVideo 换源/load()
+            // 本身会引发 video 元素 DOM/缓冲变动 → 再次触发本回调 → 反复增强重新拉流，形成
+            // "观察→改DOM→再观察"的高频循环拖垮页面。现改为节流+微任务化：每 800ms 最多执行一轮，
+            // 且放入 requestIdleCallback/setTimeout 与观察器回调解耦，杜绝同步级联触发。
+            let jhsDetailEnhanceTimer = null;
+            const runDetailEnhancements = () => {
+                if (jhsDetailEnhanceTimer) return;
+                jhsDetailEnhanceTimer = setTimeout(() => {
+                    jhsDetailEnhanceTimer = null;
+                    try {
+                        loadScreenShotOnDetail();
+                        enhancePreviewVideo();
+                        addCoverQuickButtons();
+                    } catch (e) {}
+                }, 800);
+            };
+            runDetailEnhancements();
         });
         
         // 尝试安全地添加观察者
@@ -4659,9 +5688,15 @@
             if (config.loadRelated) {
                 initRelatedEnhancement();
             }
-            // 🚀 移植自 JAV-JHS：弹窗方式打开页面 + 悬浮大图
+            // 🚀 弹窗方式打开页面 + 悬浮大图
             setupDialogOpenDetail();
             initHoverBigImg();
+            // 🚀 封面快捷按钮事件委托（一次性绑定，幂等）+ 详情页长缩略图/高画质预览视频初次执行
+            bindCoverQuickButtonEvents();
+            ensureNativePreviewHook();
+            loadScreenShotOnDetail();
+            enhancePreviewVideo();
+            addCoverQuickButtons();
         } else {
             document.addEventListener('DOMContentLoaded', () => {
                 init();
