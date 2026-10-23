@@ -2144,7 +2144,7 @@
                     if (wasVisible) {
                         videoEl.load();
                         videoEl.currentTime = currentTime;
-                        videoEl.play().catch(() => {});
+                        playJhsVideoSafely(videoEl);
                     }
                 }
                 videoEl.dataset.jhsEnhanced = '1';
@@ -2159,7 +2159,7 @@
                 // 状态即视为播放器已打开，并把工具条挂到视频所在容器（.fancybox-content）内。
                 if (wasVisible || !videoEl.paused) {
                     applyJhsMutedPreference(videoEl);
-                    if (!videoEl.paused) videoEl.play().catch(() => {});
+                    if (!videoEl.paused) playJhsVideoSafely(videoEl);
                     showPreviewToolbar(videoEl);
                 }
             } else {
@@ -2193,7 +2193,7 @@
                         if (v.style.display === 'none') {
                             v.style.display = 'block';
                             applyJhsMutedPreference(v); // 默认解除禁音（跟随用户记忆偏好）
-                            v.play().catch(() => {});
+                            playJhsVideoSafely(v);
                             showPreviewToolbar(v); // 打开播放器时才渲染画质工具条（对齐 JAV-JHS handleVideo）
                         } else {
                             v.style.display = 'none';
@@ -2246,7 +2246,7 @@
                 // "高亮变了、画质没变"）。现在未增强前不抢跑 play()，等 DMM 地址就绪、换源完成后
                 // 再统一续播，保证"正在播的一定是 DMM 源"。
                 if (videoEl.dataset.jhsEnhanced === '1') {
-                    if (!wasPlayingAtGesture) videoEl.play().catch(() => {});
+                    if (!wasPlayingAtGesture) playJhsVideoSafely(videoEl);
                     // 已增强过：播放器重新打开时补挂工具条（不再换源，保持加载速度修复）
                     if (isJhsPlayerOpened(videoEl)) showPreviewToolbar(videoEl);
                     return;
@@ -2282,7 +2282,7 @@
                     videoEl.load();
                 }
                 // 【修复 cb158f5 回归】同手势意图：用户本次点击若是"暂停"手势则不强制续播
-                if (!wasPlayingAtGesture) videoEl.play().catch(() => {});
+                if (!wasPlayingAtGesture) playJhsVideoSafely(videoEl);
                 // 【修复画质按钮点了没反应】可见性判定改用 isJhsPlayerOpened（兼容 fancybox 模态层）
                 showPreviewToolbar(videoEl);
             }, 300);
@@ -2293,6 +2293,19 @@
     // 【修复画质按钮点了没反应】"已打开"的判定不再使用 offsetParent（JavDB 原生预告片经 fancybox
     // 把视频节点搬进模态层，动画期间 offsetParent 为 null，导致工具条永远不渲染）——对齐 JAV-JHS：
     // 只要视频正在播放、或已位于 .fancybox-content 内、或正常可见，即视为播放器已打开。
+    // 【修复 AbortError: The play() request was interrupted by a new load request】
+    // load() 会使上一次未完成的 play() Promise 以 AbortError 拒绝；此前各处
+    // videoEl.play().catch(() => {}) 中 .catch() 的返回值被丢弃，部分 Chromium/Tampermonkey
+    // 环境仍将其上报为 Uncaught (in promise)。统一改为 void 吞掉 rejection。
+    function playJhsVideoSafely(videoEl) {
+        if (!videoEl || typeof videoEl.play !== 'function') return Promise.resolve();
+        try {
+            const p = videoEl.play();
+            if (p && typeof p.catch === 'function') return p.catch(() => {});
+        } catch (e) { /* 同步异常同样忽略 */ }
+        return Promise.resolve();
+    }
+
     function isJhsPlayerOpened(videoEl) {
         if (!videoEl) return false;
         if (!videoEl.paused || videoEl.currentTime > 0) return true;
@@ -2397,10 +2410,13 @@
                 // load()，把刚设好的目标画质反复打断回退——抓包看不到 720p 请求即由此而来。
                 // 现彻底删除该自创逻辑，严格对齐原版。
                 const currentTime = videoEl.currentTime;
+                // 【修复 AbortError】若上一次 play() 的 Promise 仍在途（缓冲中），
+                // 直接 load() 会使其以 AbortError 拒绝——先 pause() 让其在途状态结束。
+                if (!videoEl.paused) { try { videoEl.pause(); } catch (e) {} }
                 videoEl.setAttribute('src', btn.dataset.videoSrc);
                 videoEl.load();
                 videoEl.currentTime = currentTime;
-                await videoEl.play().catch(() => {});
+                await playJhsVideoSafely(videoEl);
                 group.querySelectorAll('.video-control-btn').forEach(b => b.classList.remove('active'));
                 btn.classList.add('active');
                 videoEl._jhsDefaultQuality = btn.dataset.quality;
@@ -2532,7 +2548,7 @@
                 // 已有缓存的视频节点：直接复用播放
                 videoEl.parentElement.style.display = '';
                 applyJhsMutedPreference(videoEl); // 默认有声（跟随记忆偏好），对齐 JAV-JHS showVideo
-                videoEl.play().catch(() => {});
+                playJhsVideoSafely(videoEl);
                 img.style.display = 'none';
                 btn.innerHTML = COVER_RECOVERY_VIDEO_SVG;
                 btn.title = '切回封面';
@@ -2587,7 +2603,7 @@
             // 与 JAV-JHS showVideo 结尾三行一致：load() → muted=false（记忆偏好）→ play()
             v.load();
             applyJhsMutedPreference(v);
-            v.play().catch(() => {});
+            playJhsVideoSafely(v);
         });
     }
 
