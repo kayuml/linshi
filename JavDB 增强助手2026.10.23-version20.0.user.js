@@ -1352,14 +1352,20 @@
             .jhs-dialog-close:hover { background: #e74c3c; color: #fff; border-color: #e74c3c; }
             .jhs-dialog-frame { flex: 1 1 auto; width: 100%; border: 0; background: #fff; }
 
-            /* 封面快捷按钮：容器与 SVG 尺寸（SVG 原始 viewBox 大，需显式约束；否则被 flex 拉伸不可见） */
+            /* 封面快捷按钮：样式完全对齐 JAV-JHS CoverButtonPlugin（.tool-box span 默认 opacity .3，悬停 1） */
+            .box .tags { justify-content: space-between; }
             .jhs-tool-box { flex: 0 0 auto !important; justify-content: flex-end; align-items: center; }
-            .jhs-tool-box span { display: inline-flex; align-items: center; opacity: .3; transition: opacity .15s ease; }
-            .jhs-tool-box span:hover { opacity: 1; }
-            .jhs-tool-box svg { width: 20px; height: 20px; flex: 0 0 auto; display: block; }
-            .jhs-tool-box .screenSvg svg path { fill: #4078FD; }
-            .jhs-tool-box .videoSvg svg path { fill: blue; }
-            [data-theme="dark"] .jhs-tool-box .videoSvg svg path { fill: white; }
+            .jhs-tool-box span{ opacity:.3 }
+            .jhs-tool-box span:hover{ opacity:1 }
+            .jhs-tool-box .jhs-icon { width: 1.5rem; height: 1.5rem; }
+            .jhs-tool-box svg path { fill: blue; }
+            [data-theme="dark"] .jhs-tool-box svg path { fill: white; }
+            /* 长缩略图加载中/失败状态不响应点击，避免打开空 lightbox */
+            .screen-container.no-click { cursor: default; pointer-events: none; }
+            .screen-container.no-click a { pointer-events: auto; }
+            /* 详情页画质切换/工具条统一样式（对齐 JAV-JHS PreviewVideoPlugin） */
+            #video-bottom-toolbar .video-control-btn { min-width:120px; padding: 7px 12px; font-size: 12px; background: rgba(0,0,0,0.7); color: white; border: none; border-radius: 4px; cursor: pointer; }
+            #video-bottom-toolbar .video-control-btn.active { background-color: #1890ff; color: white; font-weight: bold; border: 2px solid #096dd9; }
         `;
         document.head.appendChild(style);
     }
@@ -1675,8 +1681,8 @@
         return dmmVideoQualityList[0];
     }
 
- // GM 跨域 GET 封装
-    function gmHttpGet(url, headers = {}, timeout = 15000) {
+ // GM 跨域 GET 封装（带重试：对齐 JAV-JHS httpManager 默认 retryCount=1，单次偶发网络失败自动重试一次）
+    function gmHttpGetOnce(url, headers = {}, timeout = 15000) {
         return new Promise((resolve, reject) => {
             GM_xmlhttpRequest({
                 method: 'GET',
@@ -1691,6 +1697,19 @@
                 ontimeout: () => reject(new Error('请求超时'))
             });
         });
+    }
+
+    async function gmHttpGet(url, headers = {}, timeout = 15000, retryCount = 1) {
+        let lastErr;
+        for (let i = 0; i <= retryCount; i++) {
+            try {
+                return await gmHttpGetOnce(url, headers, timeout);
+            } catch (err) {
+                lastErr = err;
+                if (i < retryCount) await new Promise(r => setTimeout(r, 800));
+            }
+        }
+        throw lastErr;
     }
 
  // 简易提示条
@@ -1725,7 +1744,8 @@
         document.head.insertAdjacentHTML('beforeend', `<style>
             #jhs-lightbox { position: fixed; inset: 0; z-index: 2147483645; background: rgba(0,0,0,0.92); overflow: auto; }
             #jhs-lightbox .jhs-lightbox-stage { min-height: 100%; display: flex; align-items: center; justify-content: center; padding: 20px; box-sizing: border-box; }
-            #jhs-lightbox .jhs-lightbox-stage img { max-width: none; width: auto; height: auto; cursor: zoom-in; }
+            #jhs-lightbox .jhs-lightbox-stage img { max-width: none; width: auto; height: auto; cursor: grab; }
+            #jhs-lightbox.jhs-dragging, #jhs-lightbox.jhs-dragging * { cursor: grabbing !important; user-select: none; }
             #jhs-lightbox .jhs-lightbox-toolbar { position: fixed; top: 10px; right: 16px; z-index: 1; display: flex; gap: 8px; }
             #jhs-lightbox .jhs-lightbox-toolbar button { width: 34px; height: 34px; border: 1px solid #666; border-radius: 6px;
                 background: rgba(40,40,40,0.85); color: #eee; font-size: 17px; cursor: pointer; }
@@ -1736,11 +1756,14 @@
         document.body.style.overflow = 'hidden';
         const img = box.querySelector('img');
         let scale = 1;
+        // 光标：默认抓手（可拖动查看），放大模式下为 zoom-in，缩小回适配后恢复抓手
+        const setCursor = () => { img.style.cursor = scale < 0.999 ? 'zoom-in' : 'grab'; };
         // 直接以宽高渲染（transform:scale 不改变布局盒，缩放后可滚动区域与视觉错位，会导致画面"整体偏上"）
         const setScale = (v) => {
             scale = Math.min(Math.max(v, 0.1), 8);
             img.style.width = Math.round((img.naturalWidth || window.innerWidth) * scale) + 'px';
             img.style.height = Math.round((img.naturalHeight || window.innerHeight) * scale) + 'px';
+            setCursor();
         };
         // 初始适配：按 90% 视口等比缩小；小图保持原始高清尺寸并由容器居中；打开时滚动位置置顶
         const fitImage = () => {
@@ -1773,6 +1796,24 @@
             e.preventDefault();
             setScale(scale * (e.deltaY < 0 ? 1.1 : 0.9));
         }, { passive: false });
+
+        // 抓手拖动查看：按下后按位移滚动 lightbox 容器（长缩略图放大后可上下拖动）
+        let dragState = null;
+        img.addEventListener('mousedown', (e) => {
+            if (e.button !== 0) return;
+            e.preventDefault();
+            dragState = { x: e.clientX, y: e.clientY, sl: box.scrollLeft, st: box.scrollTop };
+            box.classList.add('jhs-dragging');
+        });
+        window.addEventListener('mousemove', (e) => {
+            if (!dragState) return;
+            box.scrollLeft = dragState.sl - (e.clientX - dragState.x);
+            box.scrollTop = dragState.st - (e.clientY - dragState.y);
+        });
+        window.addEventListener('mouseup', () => {
+            dragState = null;
+            box.classList.remove('jhs-dragging');
+        });
     }
 
  // ---------- 长缩略图 ----------
@@ -1825,6 +1866,7 @@
 
  // 详情页：在预览区(.preview-images)首位插入长缩略图块
     function renderScreenShotFallback(container, carNum) {
+        container.classList.add('no-click'); // 失败态不可点击（避免打开空 lightbox），仅重试/前往链接可点
         container.innerHTML = `<div style="margin-top:50px;color:inherit;">获取缩略图失败</div><br/>
             <a href="#" class="retry-link">点击重试</a> 或 <a href="https://javstore.net/search?q=${carNum}" target="_blank" rel="noopener">前往确认</a>`;
         container.onclick = (e) => {
@@ -1836,9 +1878,12 @@
     }
 
     function loadScreenShotInto(container, carNum) {
+        container.classList.add('no-click'); // 加载中不可点击
+        container.onclick = null;
         container.innerHTML = '<div style="margin-top:50px;color:inherit;cursor:auto">正在加载缩略图</div>';
         getScreenshot(carNum).then(imgUrl => {
             if (!imgUrl) { renderScreenShotFallback(container, carNum); return; }
+            container.classList.remove('no-click'); // 成功后恢复抓手，可点击全屏查看
             container.innerHTML = `<img src="${imgUrl}" alt="缩略图" loading="lazy" style="width:100%;">`;
             container.title = '点击全屏查看长缩略图';
             container.onclick = (e) => {
@@ -1995,14 +2040,20 @@
             const defaultVideoUrl = dmmVideoMap[defaultQuality];
             if (!defaultVideoUrl) return;
 
-            const $sel = '#preview-video';
-            let videoEl = document.querySelector($sel);
+            const videoEl = document.querySelector('#preview-video');
             if (videoEl) {
-                // 原生播放器存在：直接替换为高画质源（保留播放进度，若正在播放）
+                // 原生播放器存在（隐藏或显示）：仅静默替换 src，不自动播放、不弹工具条——
+                // 对齐 JAV-JHS initDmm：工具条由用户点击"预告片"打开播放器后（handleVideo）才出现，
+                // 避免画质切换/工具条错误地出现在图像预览旁
+                const wasVisible = videoEl.offsetParent !== null && !videoEl.paused;
                 const currentTime = videoEl.currentTime || 0;
                 videoEl.setAttribute('src', defaultVideoUrl);
-                try { videoEl.load(); videoEl.currentTime = currentTime; } catch (e) {}
-                bindQualityButtons(videoEl, dmmVideoMap, defaultQuality);
+                if (wasVisible) {
+                    try { videoEl.load(); videoEl.currentTime = currentTime; videoEl.play().catch(() => {}); } catch (e) {}
+                }
+                videoEl.dataset.jhsEnhanced = '1';
+                videoEl._jhsDmmMap = dmmVideoMap;
+                videoEl._jhsDefaultQuality = defaultQuality;
             } else {
  // JavDB 详情页没有内嵌 video 时：在预览区创建 预告片容器 + video
                 const previewImages = document.querySelector('.preview-images');
@@ -2015,44 +2066,117 @@
                     container.href = 'javascript:;';
                     container.innerHTML = `<span>预告片</span><img src="${poster}" class="video-cover" style="width:150px;height:auto;" alt="">`;
                     previewImages.prepend(container);
-                    videoEl = document.createElement('video');
-                    videoEl.id = 'preview-video';
-                    videoEl.setAttribute('playsinline', '');
-                    videoEl.setAttribute('controls', '');
-                    videoEl.setAttribute('muted', '');
-                    videoEl.preload = 'auto';
-                    videoEl.loop = true;
-                    videoEl.style.display = 'none';
-                    videoEl.src = defaultVideoUrl;
-                    container.after(videoEl);
+                    const v = document.createElement('video');
+                    v.id = 'preview-video';
+                    v.setAttribute('playsinline', '');
+                    v.setAttribute('controls', '');
+                    v.setAttribute('muted', '');
+                    v.preload = 'auto';
+                    v.loop = true;
+                    v.style.display = 'none';
+                    v.src = defaultVideoUrl;
+                    v.dataset.jhsEnhanced = '1';
+                    v._jhsDmmMap = dmmVideoMap;
+                    v._jhsDefaultQuality = defaultQuality;
+                    container.after(v);
                     container.addEventListener('click', (e) => {
                         e.preventDefault();
-                        if (videoEl.style.display === 'none') {
-                            videoEl.style.display = 'block';
-                            videoEl.play().catch(() => {});
+                        if (v.style.display === 'none') {
+                            v.style.display = 'block';
+                            applyJhsMutedPreference(v); // 默认解除禁音（跟随用户记忆偏好）
+                            v.play().catch(() => {});
+                            showPreviewToolbar(v); // 打开播放器时才渲染画质工具条（对齐 JAV-JHS handleVideo）
                         } else {
-                            videoEl.style.display = 'none';
-                            videoEl.pause();
+                            v.style.display = 'none';
+                            v.pause();
                         }
                     });
-                } else {
-                    videoEl = document.querySelector('#preview-video');
-                    if (videoEl && videoEl.getAttribute('src') !== defaultVideoUrl) {
-                        videoEl.setAttribute('src', defaultVideoUrl);
-                        try { videoEl.load(); } catch (e) {}
-                    }
                 }
-                if (videoEl) bindQualityButtons(videoEl, dmmVideoMap, defaultQuality);
             }
         } finally {
             enhancePreviewVideoRunning = false;
         }
     }
 
- // 在 video 下方渲染画质切换按钮组
+    // 静音偏好记忆（localStorage jhs_videoMuted，与 JAV-JHS 同键）：无记录时默认解除禁音
+    function applyJhsMutedPreference(videoEl) {
+        const pref = localStorage.getItem('jhs_videoMuted');
+        videoEl.muted = pref ? ('yes' === pref) : false;
+        if (!videoEl._jhsVolumeBound) {
+            videoEl._jhsVolumeBound = true;
+            videoEl.addEventListener('volumechange', () => {
+                localStorage.setItem('jhs_videoMuted', videoEl.muted ? 'yes' : 'no');
+            });
+        }
+    }
+
+    // 原生 #preview-video 的懒加载增强：JavDB 原生预告片入口被点击、播放器真正打开后，
+    // 再替换 DMM 高画质源并渲染画质工具条——保证工具条只出现在视频播放器下方
+    function ensureNativePreviewHook() {
+        if (ensureNativePreviewHook._bound) return;
+        ensureNativePreviewHook._bound = true;
+        document.addEventListener('click', (e) => {
+            if (!config.enableLoadPreviewVideo) return;
+            if (!window.location.pathname.startsWith('/v/')) return;
+            const link = e.target.closest && e.target.closest('a[href*="#preview-video"], .preview-video-container');
+            if (!link) return;
+            setTimeout(async () => {
+                const videoEl = document.querySelector('#preview-video');
+                if (!videoEl) return;
+                applyJhsMutedPreference(videoEl);
+                if (videoEl.dataset.jhsEnhanced === '1') {
+                    // 已增强过：播放器重新打开时补挂工具条
+                    if (videoEl.offsetParent !== null) showPreviewToolbar(videoEl);
+                    return;
+                }
+                const code = extractDetailCode();
+                if (!code) return;
+                const dmmVideoMap = await getDmmVideo(code);
+                if (!dmmVideoMap) return;
+                const defaultQuality = selectDefaultQuality(Object.keys(dmmVideoMap), config.videoQuality);
+                const defaultVideoUrl = dmmVideoMap[defaultQuality];
+                if (!defaultVideoUrl) return;
+                videoEl.dataset.jhsEnhanced = '1';
+                videoEl._jhsDmmMap = dmmVideoMap;
+                videoEl._jhsDefaultQuality = defaultQuality;
+                if (videoEl.getAttribute('src') !== defaultVideoUrl) {
+                    const t = videoEl.currentTime || 0;
+                    videoEl.setAttribute('src', defaultVideoUrl);
+                    try { videoEl.load(); videoEl.currentTime = t; videoEl.play().catch(() => {}); } catch (err) {}
+                }
+                showPreviewToolbar(videoEl);
+            }, 300);
+        }, true);
+    }
+
+    // 播放器可见时才渲染工具条
+    function showPreviewToolbar(videoEl) {
+        const map = videoEl && videoEl._jhsDmmMap;
+        if (!map) return;
+        if (videoEl.offsetParent === null) return; // 播放器未真正可见时不渲染
+        bindQualityButtons(videoEl, map, videoEl._jhsDefaultQuality);
+    }
+
+ // 在 video 所在容器底部渲染画质切换按钮组（工具条只跟随视频播放器，绝不插入图片预览网格）
     function bindQualityButtons(videoEl, dmmVideoMap, defaultQuality) {
-        const parent = videoEl.parentElement;
-        if (!parent || parent.querySelector('#video-bottom-toolbar')) return; // 幂等
+        let parent = videoEl.parentElement;
+        if (!parent) return;
+        // 防御：若 video 直接位于图片网格(.preview-images)内，把它移出到网格之后的独立包裹层，
+        // 避免工具条混入图像预览（这是此前"工具条出现在图像预览旁"的根因）
+        if (parent.classList && parent.classList.contains('preview-images')) {
+            let wrap = parent.parentElement && parent.parentElement.querySelector('.jhs-video-wrap');
+            if (!wrap) {
+                wrap = document.createElement('div');
+                wrap.className = 'jhs-video-wrap';
+                wrap.style.cssText = 'clear:both;margin-top:8px;position:relative;';
+                parent.insertAdjacentElement('afterend', wrap);
+            }
+            wrap.appendChild(videoEl);
+            videoEl.style.width = '100%';
+            videoEl.style.maxHeight = '70vh';
+            parent = wrap;
+        }
+        if (parent.querySelector(':scope > #video-bottom-toolbar')) return; // 幂等
         parent.style.position = 'relative';
         const toolbar = document.createElement('div');
         toolbar.id = 'video-bottom-toolbar';
@@ -2068,8 +2192,8 @@
             btn.dataset.quality = option.quality;
             btn.dataset.videoSrc = url;
             btn.textContent = option.text;
-            btn.style.cssText = 'min-width:40px;padding:5px 10px;font-size:12px;border:1px solid #ccc;border-radius:4px;cursor:pointer;' +
-                (isActive ? 'background-color:#007bff;color:white;' : 'background-color:#fff;color:black;');
+            // 不写内联颜色：样式统一交给注入 CSS（.video-control-btn/.active），
+            // 之前内联样式导致切换后视觉状态错乱（看起来"没有真实切换"）
             group.appendChild(btn);
         });
         toolbar.appendChild(group);
@@ -2078,19 +2202,15 @@
             const btn = e.target.closest('.video-control-btn');
             if (!btn || btn.classList.contains('active')) return;
             try {
+                const wasPlaying = !videoEl.paused;
                 const currentTime = videoEl.currentTime;
                 videoEl.setAttribute('src', btn.dataset.videoSrc);
                 videoEl.load();
                 videoEl.currentTime = currentTime;
-                await videoEl.play();
-                group.querySelectorAll('.video-control-btn').forEach(b => {
-                    b.classList.remove('active');
-                    b.style.backgroundColor = '#fff';
-                    b.style.color = 'black';
-                });
+                if (wasPlaying) await videoEl.play().catch(() => {});
+                group.querySelectorAll('.video-control-btn').forEach(b => b.classList.remove('active'));
                 btn.classList.add('active');
-                btn.style.backgroundColor = '#007bff';
-                btn.style.color = 'white';
+                videoEl._jhsDefaultQuality = btn.dataset.quality;
             } catch (err) {
                 console.error('切换画质失败:', err);
             }
@@ -2098,9 +2218,9 @@
     }
 
  // ---------- 封面快捷按钮：长缩略图 / 预览视频 ----------
-    const COVER_SCREEN_SVG = '<svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg" width="200" height="200"><path d="M288 160a64 64 0 0 0-64 64v576a64 64 0 0 0 64 64h448a64 64 0 0 0 64-64v-576a64 64 0 0 0-64-64h-448m0-64h448a128 128 0 0 1 128 128v576a128 128 0 0 1-128 128h-448a128 128 0 0 1-128-128v-576a128 128 0 0 1 128-128z" fill="#4078FD"></path><path d="M416 352m-64 0a64 64 0 1 0 128 0 64 64 0 1 0-128 0Z" fill="#FE9C23"></path><path d="M352 732.448a32 32 0 0 1-32-32v-160a32 32 0 0 1 44.224-29.568l130.112 53.632 153.952-169.984a32 32 0 0 1 55.712 21.472v284.448a32 32 0 0 1-32 32z m0-32h320z" fill="#4078FD" opacity=".2"></path><path d="M672 416l-169.088 186.656-150.912-62.208v160h320V416m0-32a32 32 0 0 1 32 32v284.448a32 32 0 0 1-32 32h-320a32 32 0 0 1-32-32v-160a32 32 0 0 1 44.192-29.6l130.112 53.632 153.984-169.984a32 32 0 0 1 23.712-10.496z" fill="#4078FD"></path></svg>';
-    const COVER_VIDEO_SVG = '<svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg" width="200" height="200"><path d="M825.6 153.6H198.4C124.5 153.6 64 214.1 64 288v448c0 73.9 60.5 134.4 134.4 134.4h627.2c73.9 0 134.4-60.5 134.4-134.4V288c0-73.9-60.5-134.4-134.4-134.4z m-138.2 44.8l112 112H706l-112-112h93.4z m-156.8 0l112 112H526.7l-112-112h115.9z m-179.2 0l112 112H347.5l-112-112h115.9zM108.8 288c0-41.4 28.4-76.1 66.7-86.3l108.7 108.7H108.8V288z m806.4 448c0 49.4-40.2 89.6-89.6 89.6H198.4c-49.4 0-89.6-40.2-89.6-89.6V355.2h806.4V736z m0-425.6h-52.5l-112-112h74.9c49.4 0 89.6 40.2 89.6 89.6v22.4z"></path><path d="M454 687.2l149.3-77.6c27.5-13.8 27.5-53 0-66.8L468 472.2c-31.2-15.6-68 7.1-68 42v139.6c0 27.8 29.2 45.8 54 33.4zM444.8 512l134.4 67.2-134.4 67.2V512z"></path></svg>';
-    const COVER_RECOVERY_VIDEO_SVG = '<svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg" width="200" height="200"><path d="M938.666667 553.92V768c0 64.8-52.533333 117.333333-117.333334 117.333333H202.666667c-64.8 0-117.333333-52.533333-117.333334-117.333333V256c0-64.8 52.533333-117.333333 117.333334-117.333333h618.666666c64.8 0 117.333333 52.533333 117.333334 117.333333v297.92z m-64-74.624V256a53.333333 53.333333 0 0 0-53.333334-53.333333H202.666667a53.333333 53.333333 0 0 0-53.333334 53.333333v344.48A290.090667 290.090667 0 0 1 192 597.333333a286.88 286.88 0 0 1 183.296 65.845334C427.029333 528.384 556.906667 437.333333 704 437.333333c65.706667 0 126.997333 16.778667 170.666667 41.962667z m0 82.24c-5.333333-8.32-21.130667-21.653333-43.648-32.917333C796.768 511.488 753.045333 501.333333 704 501.333333c-121.770667 0-229.130667 76.266667-270.432 188.693334-2.730667 7.445333-7.402667 20.32-13.994667 38.581333-7.68 21.301333-34.453333 28.106667-51.370666 13.056-16.437333-14.634667-28.554667-25.066667-36.138667-31.146667A222.890667 222.890667 0 0 0 192 661.333333c-14.464 0-28.725333 1.365333-42.666667 4.053334V768a53.333333 53.333333 0 0 0 53.333334 53.333333h618.666666a53.333333 53.333333 0 0 0 53.333334-53.333333V561.525333zM320 480a96 96 0 1 1 0-192 96 96 0 0 1 0 192z m0-64a32 32 0 1 0 0-64 32 32 0 0 0 0 64z" fill="#000000"></path></svg>';
+    const COVER_SCREEN_SVG = '<svg t="1750691468062" class="jhs-icon icon" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg" width="200" height="200"><path d="M288 160a64 64 0 0 0-64 64v576a64 64 0 0 0 64 64h448a64 64 0 0 0 64-64v-576a64 64 0 0 0-64-64h-448m0-64h448a128 128 0 0 1 128 128v576a128 128 0 0 1-128 128h-448a128 128 0 0 1-128-128v-576a128 128 0 0 1 128-128z" fill="#4078FD"></path><path d="M416 352m-64 0a64 64 0 1 0 128 0 64 64 0 1 0-128 0Z" fill="#FE9C23"></path><path d="M352 732.448a32 32 0 0 1-32-32v-160a32 32 0 0 1 44.224-29.568l130.112 53.632 153.952-169.984a32 32 0 0 1 55.712 21.472v284.448a32 32 0 0 1-32 32z m0-32h320z" fill="#4078FD" opacity=".2"></path><path d="M672 416l-169.088 186.656-150.912-62.208v160h320V416m0-32a32 32 0 0 1 32 32v284.448a32 32 0 0 1-32 32h-320a32 32 0 0 1-32-32v-160a32 32 0 0 1 44.192-29.6l130.112 53.632 153.984-169.984a32 32 0 0 1 23.712-10.496z" fill="#4078FD"></path></svg>';
+    const COVER_VIDEO_SVG = '<svg t="1749003664455" class="jhs-icon icon" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg" width="200" height="200"><path d="M825.6 153.6H198.4C124.5 153.6 64 214.1 64 288v448c0 73.9 60.5 134.4 134.4 134.4h627.2c73.9 0 134.4-60.5 134.4-134.4V288c0-73.9-60.5-134.4-134.4-134.4z m-138.2 44.8l112 112H706l-112-112h93.4z m-156.8 0l112 112H526.7l-112-112h115.9z m-179.2 0l112 112H347.5l-112-112h115.9zM108.8 288c0-41.4 28.4-76.1 66.7-86.3l108.7 108.7H108.8V288z m806.4 448c0 49.4-40.2 89.6-89.6 89.6H198.4c-49.4 0-89.6-40.2-89.6-89.6V355.2h806.4V736z m0-425.6h-52.5l-112-112h74.9c49.4 0 89.6 40.2 89.6 89.6v22.4z"></path><path d="M454 687.2l149.3-77.6c27.5-13.8 27.5-53 0-66.8L468 472.2c-31.2-15.6-68 7.1-68 42v139.6c0 27.8 29.2 45.8 54 33.4zM444.8 512l134.4 67.2-134.4 67.2V512z"></path></svg>';
+    const COVER_RECOVERY_VIDEO_SVG = '<svg class="jhs-icon icon" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg" width="200" height="200"><path d="M938.666667 553.92V768c0 64.8-52.533333 117.333333-117.333334 117.333333H202.666667c-64.8 0-117.333333-52.533333-117.333334-117.333333V256c0-64.8 52.533333-117.333333 117.333334-117.333333h618.666666c64.8 0 117.333333 52.533333 117.333334 117.333333v297.92z m-64-74.624V256a53.333333 53.333333 0 0 0-53.333334-53.333333H202.666667a53.333333 53.333333 0 0 0-53.333334 53.333333v344.48A290.090667 290.090667 0 0 1 192 597.333333a286.88 286.88 0 0 1 183.296 65.845334C427.029333 528.384 556.906667 437.333333 704 437.333333c65.706667 0 126.997333 16.778667 170.666667 41.962667z m0 82.24c-5.333333-8.32-21.130667-21.653333-43.648-32.917333C796.768 511.488 753.045333 501.333333 704 501.333333c-121.770667 0-229.130667 76.266667-270.432 188.693334-2.730667 7.445333-7.402667 20.32-13.994667 38.581333-7.68 21.301333-34.453333 28.106667-51.370666 13.056-16.437333-14.634667-28.554667-25.066667-36.138667-31.146667A222.890667 222.890667 0 0 0 192 661.333333c-14.464 0-28.725333 1.365333-42.666667 4.053334V768a53.333333 53.333333 0 0 0 53.333334 53.333333h618.666666a53.333333 53.333333 0 0 0 53.333334-53.333333V561.525333zM320 480a96 96 0 1 1 0-192 96 96 0 0 1 0 192z m0-64a32 32 0 1 0 0-64 32 32 0 0 0 0 64z" fill="#000000"></path></svg>';
 
     // 列表页每个 item 的 tags 行尾部追加 tool-box（📏长缩略图 + ▶预览视频），受各自开关控制
     // 样式对齐 CoverButtonPlugin：.tool-box span 默认 opacity .3，悬停变 1；SVG 路径蓝色/暗色白色
@@ -2117,7 +2237,8 @@
                 const screenBtn = document.createElement('span');
                 screenBtn.className = 'screenSvg';
                 screenBtn.title = '长缩略图';
-                screenBtn.style.cssText = 'margin-right:15px;cursor:pointer;display:inline-flex;width:24px;height:24px;';
+                // 对齐 JAV-JHS：内联仅 margin-right:15px，尺寸/透明度由注入 CSS（.jhs-icon / .jhs-tool-box span）控制
+                screenBtn.style.cssText = 'margin-right:15px;cursor:pointer;';
                 screenBtn.innerHTML = COVER_SCREEN_SVG;
                 toolBox.appendChild(screenBtn);
             }
@@ -2126,7 +2247,7 @@
                 videoBtn.className = 'videoSvg';
                 videoBtn.title = '播放预览视频';
                 videoBtn.dataset.state = 'idle';
-                videoBtn.style.cssText = 'margin-right:15px;cursor:pointer;display:inline-flex;width:24px;height:24px;';
+                videoBtn.style.cssText = 'margin-right:15px;cursor:pointer;';
                 videoBtn.innerHTML = COVER_VIDEO_SVG;
                 toolBox.appendChild(videoBtn);
             }
@@ -2209,6 +2330,7 @@
             if (videoEl) {
                 // 已有缓存的视频节点：直接复用播放
                 videoEl.parentElement.style.display = '';
+                applyJhsMutedPreference(videoEl); // 默认有声（跟随记忆偏好），对齐 JAV-JHS showVideo
                 videoEl.play().catch(() => {});
                 img.style.display = 'none';
                 btn.innerHTML = COVER_RECOVERY_VIDEO_SVG;
@@ -2238,7 +2360,7 @@
                 cover.appendChild(wrap);
                 const v = wrap.querySelector('video');
                 v.load();
-                v.muted = false;
+                applyJhsMutedPreference(v); // 默认有声（跟随记忆偏好），对齐 JAV-JHS showVideo: videoElement.muted = !1
                 v.play().catch(() => { v.muted = true; v.play().catch(() => {}); });
                 img.style.display = 'none';
                 btn.innerHTML = COVER_RECOVERY_VIDEO_SVG;
@@ -5294,6 +5416,7 @@
             initHoverBigImg();
             // 🚀 封面快捷按钮事件委托（一次性绑定，幂等）+ 详情页长缩略图/高画质预览视频初次执行
             bindCoverQuickButtonEvents();
+            ensureNativePreviewHook();
             loadScreenShotOnDetail();
             enhancePreviewVideo();
             addCoverQuickButtons();
