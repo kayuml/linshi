@@ -2129,18 +2129,24 @@
 
             const videoEl = document.querySelector('#preview-video');
             if (videoEl) {
-                // 与 JAV-JHS initDmm 逐行一致：只要原生播放器存在（无论可见与否）就换源 + load()；
-                // 仅在"未隐藏"时额外恢复进度并 play。此前加了 sameSrc 跳过和 wasVisible 条件，
-                // 导致增强完成前用户已点开播放器的场景下 src 迟迟不被替换——这正是
-                // "切换画质后按钮高亮变了、实际播放的仍是一开始加载的画质"的根因之一
-                // （懒钩子路径拿到的是旧 map/旧默认源，与静默增强写入的工具条数据不一致）。
-                const currentTime = videoEl.currentTime;
-                videoEl.setAttribute('src', defaultVideoUrl);
-                const isHidden = videoEl.offsetParent === null || getComputedStyle(videoEl).display === 'none';
-                if (!isHidden) {
-                    videoEl.load();
-                    videoEl.currentTime = currentTime;
-                    videoEl.play().catch(() => {});
+                // 【修复 f9b1fa4 引入的页面卡死】initDmm 语义是"页面加载时的静默增强"：
+                // 无条件 setAttribute('src')+load()+play() 会在 MutationObserver 每次 DOM 变动
+                // 触发本函数时把刚缓冲好的视频强制重新拉流，形成 load→databytes buffered→DOM 变动
+                // →再 load 的死循环，表现为整页卡住——f9b1fa4 删掉 sameSrc 跳过后正是踩了这个坑。
+                // 现恢复"src 相同则跳过换源/load"的判断；同时保留 f9b1fa4 的正确修复：
+                // 换源时恢复进度并续播（解决增强完成前用户已点开播放器导致 src 迟迟不被替换、
+                // "切换画质后实际播放的仍是一开始画质"的问题），且重挂工具条前先移除旧工具条。
+                const curAttr = videoEl.getAttribute('src') || '';
+                const sameSrc = curAttr === defaultVideoUrl || (videoEl.currentSrc && videoEl.currentSrc === defaultVideoUrl);
+                const wasVisible = videoEl.offsetParent !== null;
+                if (!sameSrc) {
+                    const currentTime = videoEl.currentTime || 0;
+                    videoEl.setAttribute('src', defaultVideoUrl);
+                    if (wasVisible) {
+                        videoEl.load();
+                        videoEl.currentTime = currentTime;
+                        videoEl.play().catch(() => {});
+                    }
                 }
                 videoEl.dataset.jhsEnhanced = '1';
                 videoEl._jhsDmmMap = dmmVideoMap;
@@ -2148,7 +2154,7 @@
                 // 播放器已可见时（用户在异步增强完成前就点开了预告片）：先移除可能已由懒钩子
                 // 用旧数据渲染的工具条，再按最新 map 重挂——保证按钮 data-video-src 与当前源一致，
                 // 杜绝"高亮变了但实际播放的仍是一开始加载的画质"
-                if (videoEl.offsetParent !== null) {
+                if (wasVisible) {
                     // 与 JAV-JHS handleVideo 一致：播放器打开状态下应用静音偏好并继续播放
                     applyJhsMutedPreference(videoEl);
                     videoEl.play().catch(() => {});
@@ -5503,9 +5509,23 @@
                 initHoverBigImg();
             }
             // 🚀 详情页长缩略图 / 更高画质预览视频 / 封面快捷按钮（均幂等）
-            loadScreenShotOnDetail();
-            enhancePreviewVideo();
-            addCoverQuickButtons();
+            // 【修复页面卡死】此前直接挂在 MutationObserver 回调里：enhancePreviewVideo 换源/load()
+            // 本身会引发 video 元素 DOM/缓冲变动 → 再次触发本回调 → 反复增强重新拉流，形成
+            // "观察→改DOM→再观察"的高频循环拖垮页面。现改为节流+微任务化：每 800ms 最多执行一轮，
+            // 且放入 requestIdleCallback/setTimeout 与观察器回调解耦，杜绝同步级联触发。
+            let jhsDetailEnhanceTimer = null;
+            const runDetailEnhancements = () => {
+                if (jhsDetailEnhanceTimer) return;
+                jhsDetailEnhanceTimer = setTimeout(() => {
+                    jhsDetailEnhanceTimer = null;
+                    try {
+                        loadScreenShotOnDetail();
+                        enhancePreviewVideo();
+                        addCoverQuickButtons();
+                    } catch (e) {}
+                }, 800);
+            };
+            runDetailEnhancements();
         });
         
         // 尝试安全地添加观察者
