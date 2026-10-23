@@ -1,0 +1,4325 @@
+// ==UserScript==  
+// @name         JavDB 增强助手
+// @namespace    
+// @version      2026.10.23-version20.0
+// @description  将 JavDB 网站的繁体中文转换为简体中文的同时由内置的终极谷歌翻译引擎(防缓存污染/并发限流/风控弹窗自动重试/残料二次翻译/季集转换)深度汉化视频标题、资讯标题及关联列表，自动点击年龄验证按钮，并隐藏网站低频次使用的组件和会员专属功能，同时为标题和系列名等内容添加主题自适应的复制按钮，将会员专属的"在线观看"封面修复为普通封面，自动显示影片原标题，分页样式优化并添加跳转到指定页功能，搜索栏深度美化(毛玻璃/独立圆角/双主题自适应，可开关)，全局链接新窗口打开(可开关)，评论与磁链增强(隐藏"短评需VIP"提示+补全原生短评用户名&具体发表时间+追加并美化第三方评论+磁链列表卡片化排版，可开关)，相关清单增强(在短评旁创建独立标签，通过API加载清单列表并支持分页，绕过原生VIP限制，可开关)，访问 javdb.com 时自动将所有链接指向可以直接访问的最新域名，503错误页自动重载重试，已下载影片标记(含链接/系列)与管理列表，数据与设置支持本地/WebDAV备份，支持自定义功能开关
+// @author       
+// @include      https://javdb*.com/*  
+// @grant        GM_addStyle
+// @grant        GM_info
+// @grant        GM_setValue
+// @grant        GM_getValue
+// @grant        GM_xmlhttpRequest
+// @grant        GM_addValueChangeListener
+// @require      https://cdn.jsdelivr.net/npm/blueimp-md5@2.19.0/js/md5.min.js
+// @connect      jdforrepam.com
+// @connect      translate.googleapis.com
+// @connect      google.com
+// @connect      www.google.com
+// @connect      127.0.0.1
+// @connect      *
+// @run-at       document-start  
+// @icon         
+// ==/UserScript==
+(function() {
+    'use strict';
+    // ==================== 配置管理 ====================
+    // 用户脚本的默认配置，默认只开启汉化、自动点击年龄验证、隐藏应用推广横幅、显示重试按钮和分页样式优化
+    const DEFAULT_CONFIG = {
+        translation: true,           // 简体中文翻译（默认开启）
+        autoClickAge: true,          // 自动点击年龄验证（默认开启）
+        hideBanner: true,            // 隐藏应用推广横幅（默认开启）
+        hideVipItems: false,         // 隐藏会员专属菜单
+        hideFooter: false,           // 隐藏页脚导航
+        hideFloatButtons: false,     // 隐藏悬浮按钮
+        hidePaymentLog: false,       // 隐藏支付记录
+        hideVipLink: false,          // 隐藏"成为VIP"
+        hideFeedback: false,         // 隐藏反馈入口
+        hideTheporndude: false,      // 隐藏ThePornDude入口
+        hideAISexyGirlfriend: false,      // 隐藏AI色色女友💋入口
+        hideTopNavExtras: false,     // 隐藏顶部外部功能区
+        hideSearchKeywords: false,   // 隐藏搜索区域热搜关键词
+        copyButtons: true,          // 添加复制按钮（默认开启）
+        fixVipCover: false,          // 修复会员专属封面
+        showOriginTitle: true,      // 自动显示原标题（默认开启）
+        paginationJump: true,        // 分页样式优化并添加跳转到指定页码（默认开启）
+        beautifySearchBar: true,     // 搜索栏美化（默认开启）
+        openNewTab: true,            // 全局链接新窗口打开（默认开启）
+        linkRewrite: false,          // 链接重写到最新域名
+        retryButton: true,           // 显示重新翻译按钮（默认开启）
+        autoReload503: true,         // 503错误页自动重载（默认开启）
+        downloadMark: true,          // 已下载标记（默认开启）
+        loadReviews: false,          // 查看评论信息（默认关闭）
+        loadRelated: false           // 相关清单增强（默认关闭）
+    };
+    let config = Object.assign({}, DEFAULT_CONFIG);  
+  
+    // 加载配置
+    function loadConfig() {
+        const saved = GM_getValue('javdb_config', null);
+        if (saved) {
+            try {
+                config = Object.assign({}, DEFAULT_CONFIG, JSON.parse(saved));
+            } catch (e) {
+                console.error('加载配置失败:', e);
+            }
+        }
+    }  
+  
+    // 保存配置
+    function saveConfig() {
+        GM_setValue('javdb_config', JSON.stringify(config));
+    }  
+  
+    // ==================== 链接重写功能 ====================
+    // 在 javdb.com 域名下，将所有指向 javdb.com 的链接替换为脚本中内置的另一个域名
+    function rewriteLinksToTempDomain() {
+        if (!config.linkRewrite) return;
+        
+        const permanentHost = 'javdb.com';
+        const tempHost = 'javdb575.com'; // 内置临时域名
+        
+        // 如果当前域名不是永久域名，则不执行重写
+        if (location.hostname !== permanentHost && !location.hostname.endsWith('.' + permanentHost)) {
+            return;
+        }
+        
+        // 替换链接的主函数
+        const replaceLinks = () => {
+            document.querySelectorAll('a[href]').forEach(a => {
+                try {
+                    const url = new URL(a.href);
+                    // 检查是否是目标域名（包括子域名）
+                    if (url.hostname === permanentHost || url.hostname.endsWith('.' + permanentHost)) {
+                        url.hostname = tempHost;
+                        a.href = url.toString();
+                        
+                        // 同时处理data-href属性（如果有）
+                        if (a.hasAttribute('data-href')) {
+                            const dataHref = a.getAttribute('data-href');
+                            try {
+                                const dataUrl = new URL(dataHref);
+                                if (dataUrl.hostname === permanentHost || dataUrl.hostname.endsWith('.' + permanentHost)) {
+                                    dataUrl.hostname = tempHost;
+                                    a.setAttribute('data-href', dataUrl.toString());
+                                }
+                            } catch (e) {
+                                // 忽略无法解析的data-href
+                            }
+                        }
+                    }
+                } catch (e) {
+                    // 忽略无法解析的URL
+                }
+            });
+            
+            // 同时处理表单的action属性
+            document.querySelectorAll('form[action]').forEach(form => {
+                try {
+                    const url = new URL(form.action, location.href);
+                    if (url.hostname === permanentHost || url.hostname.endsWith('.' + permanentHost)) {
+                        url.hostname = tempHost;
+                        form.action = url.toString();
+                    }
+                } catch (e) {
+                    // 忽略无法解析的URL
+                }
+            });
+        };
+        
+        // 初次替换
+        replaceLinks();
+        
+        // 监听动态内容变化
+        const observer = new MutationObserver((mutations) => {
+            let shouldReplace = false;
+            for (const mutation of mutations) {
+                if (mutation.type === 'childList' && mutation.addedNodes.length > 0) {
+                    shouldReplace = true;
+                    break;
+                }
+            }
+            if (shouldReplace) {
+                setTimeout(replaceLinks, 100); // 延迟执行确保新元素已完全加载
+            }
+        });
+        
+        observer.observe(document.documentElement, {
+            childList: true,
+            subtree: true
+        });
+    }
+
+    // ==================== 全局链接新窗口打开 ====================
+    // 例外：锚点、JS 伪链接、Rails 功能性链接(data-method)、分页（分页保持当前页跳转）
+    function applyOpenInNewTab() {
+        if (!config.openNewTab) return;
+
+        // 🚀 分页链接一律当前页跳转（并清理之前可能误加的 _blank）
+        document.querySelectorAll('nav.pagination a, a.pagination-link, a.pagination-previous, a.pagination-next').forEach(a => {
+            if (a.getAttribute('target') === '_blank') {
+                a.removeAttribute('target');
+                a.removeAttribute('rel');
+            }
+        });
+
+        document.querySelectorAll('a[href]').forEach(a => {
+            const href = a.getAttribute('href') || '';
+            if (!href || href.startsWith('#') || href.startsWith('javascript:')) return;
+            if (a.hasAttribute('data-method')) return;
+            // 跳过底部分页区域
+            if (a.closest('nav.pagination')) return;
+            if (!a.getAttribute('target')) {
+                a.setAttribute('target', '_blank');
+                a.setAttribute('rel', 'noopener noreferrer');
+            }
+        });
+    }
+
+    // 搜索行为新窗口打开（拦截检索按钮 + 回车），与分页的当前页跳转形成对照
+    function hookSearchOpenNewTab() {
+        if (!config.openNewTab) return;
+
+        const doSearchNewTab = () => {
+            const input = document.getElementById('video-search');
+            const select = document.getElementById('search-type');
+            const q = input ? input.value.trim() : '';
+            if (!q) return false;
+            const f = select ? select.value : ((input && input.getAttribute('data-type')) || 'all');
+            window.open(`${location.origin}/search?q=${encodeURIComponent(q)}&f=${f}`, '_blank');
+            return true;
+        };
+
+        // 拦截「检索」按钮点击（捕获阶段，抢先于网站自带的当前页跳转逻辑）
+        document.addEventListener('click', (e) => {
+            if (!(e.target.closest && e.target.closest('#search-submit'))) return;
+            if (doSearchNewTab()) {
+                e.preventDefault();
+                e.stopPropagation();
+            }
+        }, true);
+
+        // 拦截搜索框回车快捷搜索
+        document.addEventListener('keydown', (e) => {
+            if (e.key !== 'Enter') return;
+            const input = e.target && e.target.closest ? e.target.closest('#video-search') : null;
+            if (!input) return;
+            if (doSearchNewTab()) {
+                e.preventDefault();
+                e.stopPropagation();
+            }
+        }, true);
+    }
+
+    // ==================== 第三方评论功能 ====================
+    const JD_API_BASE = "https://jdforrepam.com/api";
+    
+    // 生成第三方 API 所需的签名
+    function buildJdSignature() {
+        const tsKey = "javdb_review_ts", signKey = "javdb_review_sign";
+        const n = Math.floor(Date.now() / 1e3);
+        if (n - (localStorage.getItem(tsKey) || 0) <= 20) return localStorage.getItem(signKey);
+        const salt = "71cf27bb3c0bcdf207b64abecddc970098c7421ee7203b9cdae54478478a199e7d5a6e1a57691123c1a931c057842fb73ba3b3c83bcd69c17ccf174081e3d8aa";
+        const hash = md5(`${n}${salt}`);
+        const sign = `${n}.lpw6vgqzsp.${hash}`;
+        localStorage.setItem(tsKey, n);
+        localStorage.setItem(signKey, sign);
+        return sign;
+    }
+
+    // 请求评论数据
+    async function fetchReviews(movieId, page = 1, limit = 20) {
+        const url = `${JD_API_BASE}/v1/movies/${movieId}/reviews?page=${page}&sort_by=hotly&limit=${limit}`;
+        return new Promise((resolve, reject) => {
+            GM_xmlhttpRequest({
+                method: 'GET',
+                url: url,
+                headers: {
+                    'jdSignature': buildJdSignature(),
+                    'Accept': 'application/json'
+                },
+                onload: res => {
+                    if (res.status >= 200 && res.status < 300) {
+                        try {
+                            const data = JSON.parse(res.responseText);
+                            resolve(data.data ? data.data.reviews || [] : []);
+                        } catch (e) { reject(new Error('解析评论数据失败')); }
+                    } else { reject(new Error(`请求评论失败: ${res.status}`)); }
+                },
+                onerror: () => reject(new Error('网络请求失败')),
+                ontimeout: () => reject(new Error('请求超时'))
+            });
+        });
+    }
+
+    // ---------- 辅助：HTML 转义，防止评论内容破坏结构 ----------
+    function escapeHtml(s) {
+        return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    // ---------- 辅助：文本归一化（去掉所有空白字符，用于比对重合评论） ----------
+    function normalizeText(s) {
+        return (s || '').replace(/\s+/g, '').trim();
+    }
+
+    // ---------- 生成追加评论节点：1:1 复刻原生短评结构，保证 UI 完全一致 ----------
+    // ========== 4格缩进：函数定义 ==========
+    function buildAppendedReviewItem(review) {
+        // ========== 8格缩进：函数内部 ==========
+        const dt = document.createElement('dt');
+        dt.className = 'review-item ht-review-appended';
+        const d = review.created_at ? new Date(review.created_at) : null;
+        
+        // ✅ 修复2：补全到秒级时间戳
+        const time = d && !isNaN(d)
+            ? `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`
+            : '';
+        
+        const score = Math.max(0, Math.min(5, review.score || 0));
+        const stars = score ? `<span class="ht-stars" title="评分 ${score}">${'★'.repeat(score)}</span>` : '';
+        const likes = review.likes_count || 0;
+        const content = escapeHtml(review.content || '').replace(/\n/g, '<br>');
+        
+        dt.innerHTML = `
+            <div class="review-title">
+                <div class="likes is-pulled-right">
+                    <button type="button" class="button is-small is-info ht-static-like" tabindex="-1" title="第三方点赞数（不可操作）">
+                        <span class="label">赞</span>
+                        <span class="likes-count">${likes}</span>
+                    </button>
+                </div>
+                <span class="ht-review-user">${escapeHtml(review.username || '匿名用户')}</span>&nbsp;
+                <span class="ht-third-tag">三方</span>
+                ${stars}&nbsp;
+                <span class="time">${time}</span>
+            </div>
+            <div class="content">
+                <p>${content}</p>
+            </div>
+        `;
+        return dt;
+    }
+
+    // ---------- 评论融合主函数：原生短评 × 第三方评论 无缝合并 ----------
+    async function mergeThirdPartyReviews() {
+        if (!config.loadReviews) return;
+        if (!window.location.pathname.startsWith('/v/')) return;
+
+        const reviewList = document.querySelector('#reviews dl.review-items, [data-movie-tab-target="reviews"] dl.review-items');
+        if (!reviewList || reviewList.dataset.htReviewsMerged) return;
+
+        const movieId = (window.location.pathname.match(/^\/v\/([a-zA-Z0-9]+)/) || [])[1];
+        if (!movieId) return;
+
+        let reviews = null;
+        try {
+            reviews = await fetchReviews(movieId, 1, 50);
+        } catch (e) {
+            console.warn('[JavDB 增强] 第三方评论获取失败，保持原生样式:', e);
+        }
+        // 无论成功失败都打标记，避免每次 DOM 变动都发请求
+        reviewList.dataset.htReviewsMerged = 'true';
+        if (!reviews || reviews.length === 0) return;
+
+        // 重合评论 → 原生评论补全完整用户名 + 精确时间戳（赞/举报按钮原样保留）
+        const matched = new Set();
+        reviewList.querySelectorAll('dt.review-item:not(.more):not(.ht-review-appended)').forEach(nativeEl => {
+            const contentEl = nativeEl.querySelector('.content');
+            const nativeContent = normalizeText(contentEl ? contentEl.textContent : '');
+            if (!nativeContent) return;
+            
+            const hitIdx = reviews.findIndex((r, idx) => !matched.has(idx) && normalizeText(r.content) === nativeContent);
+            if (hitIdx === -1) return;
+            matched.add(hitIdx);
+            
+            const titleEl = nativeEl.querySelector('.review-title');
+            if (!titleEl) return;
+            
+            // 补全完整用户名
+            for (const node of titleEl.childNodes) {
+                if (node.nodeType === Node.TEXT_NODE && node.nodeValue.trim()) {
+                    node.nodeValue = (reviews[hitIdx].username || '匿名用户') + ' ';
+                    break;
+                }
+            }
+            
+            // ✅ 修复2：补全原生评论的精确时间戳（YYYY-MM-DD HH:mm:ss）
+            const timeEl = nativeEl.querySelector('.time');
+            if (timeEl && reviews[hitIdx].created_at) {
+                const d = new Date(reviews[hitIdx].created_at);
+                if (!isNaN(d)) {
+                    timeEl.textContent = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`;
+                }
+            }
+        });
+
+        // 融合③：网站没有的评论 → 追加到列表末尾（只显示赞的数据）
+        reviews.forEach((r, idx) => {
+            if (matched.has(idx)) return;
+            reviewList.appendChild(buildAppendedReviewItem(r));
+        });
+    }
+
+    // ==================== 相关清单增强功能 (独立标签版) ====================
+    let relatedState = {
+        movieId: null,
+        page: 1,
+        floorIndex: 1,
+        loading: false,
+        hasMore: true,
+        loaded: false,
+        loadedIds: new Set()          // 🚀 已加载清单 id，用于去重 / 判定越界重复
+    };
+
+    // 请求相关清单数据
+    async function fetchRelatedLists(movieId, page = 1, limit = 20) {
+        const url = `${JD_API_BASE}/v1/lists/related?movie_id=${movieId}&page=${page}&limit=${limit}`;
+        return new Promise((resolve, reject) => {
+            GM_xmlhttpRequest({
+                method: 'GET',
+                url: url,
+                headers: {
+                    'jdSignature': buildJdSignature(),
+                    'Accept': 'application/json'
+                },
+                onload: res => {
+                    if (res.status >= 200 && res.status < 300) {
+                        try {
+                            const data = JSON.parse(res.responseText);
+                            resolve(data.data ? data.data.lists || [] : []);
+                        } catch (e) { reject(new Error('解析相关清单数据失败')); }
+                    } else { reject(new Error(`请求相关清单失败: ${res.status}`)); }
+                },
+                onerror: () => reject(new Error('网络请求失败')),
+                ontimeout: () => reject(new Error('请求超时'))
+            });
+        });
+    }
+
+    // 格式化日期：完整显示 年-月-日 时:分:秒
+    function formatFullDateTime(dateStr) {
+        if (!dateStr) return '未知';
+        const d = new Date(dateStr);
+        if (isNaN(d.getTime())) return '未知';
+        const pad = n => String(n).padStart(2, '0');
+        return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+    }
+
+    // 构建单个清单项的HTML
+    function buildRelatedItemHTML(item, index) {
+        const name = escapeHtml(item.name || '未命名清单');
+        const movieCount = item.movies_count || 0;
+        const collectionCount = item.collections_count || 0;
+        const viewCount = item.views_count || 0;
+        const createdAt = formatFullDateTime(item.created_at);
+        const href = `/lists/${encodeURIComponent(item.id)}`;
+
+        return `
+        <div class="ht-related-item">
+            <div class="ht-related-item-title">
+                <span class="ht-related-index">#${index}</span>
+                <a href="${href}" target="_blank" rel="noopener noreferrer">${name}</a>
+            </div>
+            <div class="ht-related-meta">
+                <span>视频：${movieCount}</span>
+                <span>收藏：${collectionCount}</span>
+                <span>查看：${viewCount}</span>
+                <span>创建：${createdAt}</span>
+            </div>
+        </div>`;
+    }
+
+    // 加载相关清单数据到独立容器
+    async function loadRelatedData(container, append = false) {
+        if (relatedState.loading) return;
+        if (append && !relatedState.hasMore) return;     // 仅"加载更多"时拦截，首屏始终放行
+
+        relatedState.loading = true;
+        const targetPage = append ? relatedState.page + 1 : 1;   // 页码内聚计算，失败不跳页
+
+        if (!append) {
+            container.innerHTML = '<div class="ht-related-loading">正在加载相关清单...</div>';
+            relatedState.loadedIds = new Set();          // 首屏重置去重集合
+            relatedState.floorIndex = 1;
+            relatedState.page = 1;
+            relatedState.hasMore = true;
+        } else {
+            const loadMoreBtn = container.querySelector('.ht-related-load-more');
+            if (loadMoreBtn) {
+                loadMoreBtn.textContent = '加载中...';
+                loadMoreBtn.disabled = true;
+            }
+        }
+
+        try {
+            const lists = await fetchRelatedLists(relatedState.movieId, targetPage, 20);
+            if (!append) container.innerHTML = '';
+
+            // 首屏空结果
+            if (lists.length === 0 && targetPage === 1) {
+                container.innerHTML = '<div class="ht-related-empty">暂无相关清单</div>';
+                relatedState.hasMore = false;
+                relatedState.loaded = true;
+                return;
+            }
+
+            // 🚀 渲染：按 id 去重，跳过重复条目；统一插在按钮之前，保证按钮恒在末尾
+            let added = 0;
+            const anchor = container.querySelector('.ht-related-load-more');
+            lists.forEach(item => {
+                const id = String(item.id ?? '');
+                if (id && relatedState.loadedIds.has(id)) return;   // 越界回吐的旧数据 → 丢弃
+                if (id) relatedState.loadedIds.add(id);
+                const html = buildRelatedItemHTML(item, relatedState.floorIndex);
+                relatedState.floorIndex++;
+                added++;
+                if (anchor) anchor.insertAdjacentHTML('beforebegin', html);
+                else container.insertAdjacentHTML('beforeend', html);
+            });
+
+            relatedState.page = targetPage;               // 请求成功才推进页码
+            relatedState.loaded = true;
+
+            // 🚀 终止判定：不满一页 或 本页全是重复 → 没有更多，移除按钮
+            if (lists.length < 20 || added === 0) {
+                relatedState.hasMore = false;
+                const btn = container.querySelector('.ht-related-load-more');
+                if (btn) btn.remove();
+                if (!container.querySelector('.ht-related-end')) {
+                    container.insertAdjacentHTML('beforeend',
+                        '<div class="ht-related-empty ht-related-end">已加载全部清单</div>');
+                }
+            } else {
+                const btn = container.querySelector('.ht-related-load-more');
+                if (btn) {
+                    btn.textContent = '加载更多清单';
+                    btn.disabled = false;
+                } else {
+                    const nb = document.createElement('button');
+                    nb.className = 'ht-related-load-more';
+                    nb.textContent = '加载更多清单';
+                    nb.addEventListener('click', () => loadRelatedData(container, true));  // 不再外部 page++
+                    container.appendChild(nb);
+                }
+            }
+        } catch (e) {
+            console.warn('[JavDB 增强] 相关清单加载失败:', e);
+            if (!append) {
+                container.innerHTML = '<div class="ht-related-empty">加载失败，点击重试</div>';
+                const retry = container.querySelector('.ht-related-empty');
+                retry.style.cursor = 'pointer';
+                retry.addEventListener('click', () => loadRelatedData(container, false));
+            } else {
+                const btn = container.querySelector('.ht-related-load-more');
+                if (btn) {
+                    btn.textContent = '加载失败，点击重试';
+                    btn.disabled = false;
+                }
+            }
+        } finally {
+            relatedState.loading = false;
+        }
+    }
+
+    // 🚀 核心主函数：在旁边创建一个全新的 Tab 和容器，彻底绕过原生 VIP 限制
+    function initRelatedEnhancement() {
+        if (!config.loadRelated) return;
+        if (!window.location.pathname.startsWith('/v/')) return;
+
+        const movieId = (window.location.pathname.match(/^\/v\/([a-zA-Z0-9]+)/) || [])[1];
+        if (!movieId) return;
+
+        // 防止重复初始化
+        if (document.getElementById('ht-related-custom-tab')) return;
+
+        // 1. 找到原生 Tab 列表 (通常在 .tabs ul)
+        const tabList = document.querySelector('.tabs ul, [data-controller="movie-tab"] .tabs ul');
+        if (!tabList) return;
+
+        // 2. 创建我们的新 Tab (另起炉灶)
+        const customLi = document.createElement('li');
+        customLi.id = 'ht-related-custom-tab';
+        customLi.className = 'ht-related-tab-li';
+        customLi.innerHTML = `<a>📋 相关清单</a>`;
+        tabList.appendChild(customLi);
+
+        // 3. 创建独立的内容容器
+        const tabContainer = tabList.closest('.tabs');
+        const contentPanel = document.createElement('div');
+        contentPanel.id = 'ht-related-content-panel';
+        contentPanel.className = 'ht-related-content-panel';
+        contentPanel.style.display = 'none';
+        
+        // 插入位置：tabs 容器之后
+        if (tabContainer && tabContainer.parentNode) {
+            tabContainer.parentNode.insertBefore(contentPanel, tabContainer.nextSibling);
+        } else {
+            document.body.appendChild(contentPanel); // 兜底
+        }
+
+        // 4. 初始化状态
+        relatedState.movieId = movieId;
+        relatedState.page = 1;
+        relatedState.floorIndex = 1;
+        relatedState.loading = false;
+        relatedState.hasMore = true;
+        relatedState.loaded = false;
+        relatedState.loadedIds = new Set();      // 🚀 切换/刷新影片时清空去重集合
+
+        // 辅助函数：显示我们的面板，隐藏原生面板
+        function showRelatedPanel() {
+            // 切换 Tab 激活状态
+            tabList.querySelectorAll('li').forEach(li => li.classList.remove('is-active'));
+            customLi.classList.add('is-active');
+
+            // 隐藏原生内容 (短评、磁链等)
+            document.querySelectorAll('#reviews, #magnets-content, [data-movie-tab-target="reviews"], [data-movie-tab-target="magnets"]').forEach(el => {
+                el.style.display = 'none';
+            });
+            
+            // 显示我们的面板
+            contentPanel.style.display = 'block';
+
+            // 加载数据
+            if (!relatedState.loaded && !relatedState.loading) {
+                loadRelatedData(contentPanel);
+            }
+        }
+
+        // 辅助函数：隐藏我们的面板 (当用户点击其他原生 Tab 时)
+        function hideRelatedPanel() {
+            customLi.classList.remove('is-active');
+            contentPanel.style.display = 'none';
+        }
+
+        // 5. 绑定点击事件
+        customLi.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            showRelatedPanel();
+        });
+
+        // 6. 监听整个 Tab 区域的点击，如果点击的不是我们的 Tab，就隐藏我们的面板
+        // 使用捕获阶段，确保在 JavDB 原生逻辑执行时，我们也能同步重置 UI
+        document.addEventListener('click', (e) => {
+            const target = e.target.closest('.tabs li');
+            if (target && target !== customLi) {
+                // 用户点击了原生 Tab (如短评、磁链)
+                hideRelatedPanel();
+            }
+        }, true);
+    }
+
+    // ==================== 设置面板 ====================
+    // 设置面板的CSS样式，支持暗色模式适配
+    GM_addStyle(`
+        .javdb-settings-panel {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+            z-index: 10000;
+            width: 500px;
+            max-height: 80vh;
+            overflow-y: auto;
+            display: none;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+        }  
+  
+        .javdb-settings-panel.active {    
+            display: block;    
+        }    
+  
+        .javdb-settings-header {    
+            padding: 20px;    
+            border-bottom: 1px solid #e0e0e0;    
+            display: flex;    
+            justify-content: space-between;    
+            align-items: center;    
+        }    
+  
+        .javdb-settings-header h2 {    
+            margin: 0;    
+            font-size: 18px;    
+            color: #333;    
+        }    
+  
+        .javdb-settings-close {    
+            background: none;    
+            border: none;    
+            font-size: 24px;    
+            cursor: pointer;    
+            color: #999;    
+            padding: 0;    
+            width: 30px;    
+            height: 30px;    
+            line-height: 30px;    
+            text-align: center;    
+        }    
+  
+        .javdb-settings-close:hover {    
+            color: #333;    
+        }    
+  
+        .javdb-settings-body {    
+            padding: 20px;    
+        }    
+  
+        .javdb-setting-item {
+            padding: 12px 0;
+            border-bottom: 1px solid #f0f0f0;
+        }
+
+        .javdb-setting-item:last-child {
+            border-bottom: none;
+        }
+
+        /* 标题与开关同一行，垂直居中对齐，与描述行数彻底解耦 */
+        .javdb-setting-head {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .javdb-setting-label {
+            font-size: 14px;
+            color: #333;
+            flex: 1;
+            min-width: 0;
+        }
+
+        .javdb-setting-desc {
+            font-size: 12px;
+            color: #999;
+            margin-top: 6px;
+            line-height: 1.5;
+        }
+  
+        .javdb-toggle {    
+            position: relative;    
+            width: 44px;    
+            height: 24px;    
+            background: #ccc;    
+            border-radius: 12px;    
+            cursor: pointer;    
+            transition: background 0.3s;    
+        }    
+  
+        .javdb-toggle.active {    
+            background: #3273dc;    
+        }    
+  
+        .javdb-toggle::after {    
+            content: '';    
+            position: absolute;    
+            top: 2px;    
+            left: 2px;    
+            width: 20px;    
+            height: 20px;    
+            background: white;    
+            border-radius: 50%;    
+            transition: transform 0.3s;    
+        }    
+  
+        .javdb-toggle.active::after {    
+            transform: translateX(20px);    
+        }    
+  
+        .javdb-settings-footer {    
+            padding: 15px 20px;    
+            border-top: 1px solid #e0e0e0;    
+            display: flex;    
+            justify-content: flex-end;    
+            gap: 10px;    
+        }    
+  
+        .javdb-btn {    
+            padding: 8px 16px;    
+            border-radius: 6px;    
+            border: 1px solid #ddd;    
+            background: white;    
+            cursor: pointer;    
+            font-size: 14px;    
+            transition: all 0.2s;    
+        }    
+  
+        .javdb-btn:hover {    
+            background: #f5f5f5;    
+        }    
+  
+        .javdb-btn-primary {    
+            background: #3273dc;    
+            color: white;    
+            border-color: #3273dc;    
+        }    
+  
+        .javdb-btn-primary:hover {    
+            background: #2366d1;    
+        }    
+  
+        .javdb-settings-trigger {    
+            position: fixed;    
+            right: 20px;    
+            top: 80px;    
+            background: #3273dc;    
+            color: white;    
+            border: none;    
+            border-radius: 6px;    
+            padding: 10px 15px;    
+            font-size: 14px;    
+            cursor: pointer;    
+            z-index: 9998;    
+            box-shadow: 0 2px 8px rgba(0,0,0,0.2);    
+            transition: all 0.3s;    
+        }    
+  
+        .javdb-settings-trigger:hover {    
+            background: #2366d1;    
+            transform: translateY(-2px);    
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);    
+        }    
+  
+        .javdb-settings-overlay {    
+            position: fixed;    
+            top: 0;    
+            left: 0;    
+            right: 0;    
+            bottom: 0;    
+            background: rgba(0,0,0,0.5);    
+            z-index: 9999;    
+            display: none;    
+        }    
+  
+        .javdb-settings-overlay.active {    
+            display: block;    
+        }    
+
+        /* 禁用态的toggle开关（灰色不可点击，不改变实际状态） */
+        .javdb-toggle.disabled {
+            background: #e0e0e0 !important;
+            cursor: not-allowed !important;
+            opacity: 0.6;
+        }
+
+        .javdb-toggle.disabled::after {
+            transform: translateX(0) !important;
+            background: #bbb !important;
+        }
+
+        .javdb-setting-item.is-disabled .javdb-setting-label,
+        .javdb-setting-item.is-disabled .javdb-setting-desc {
+            color: #bbb !important;
+        }
+
+        /* 暗色模式 */    
+        html[data-theme="dark"] .javdb-settings-panel {    
+            background: #1e1e1e;    
+        }    
+  
+        html[data-theme="dark"] .javdb-settings-header {    
+            border-bottom-color: #333;    
+        }    
+  
+        html[data-theme="dark"] .javdb-settings-header h2 {    
+            color: #ddd;    
+        }    
+  
+        html[data-theme="dark"] .javdb-setting-item {    
+            border-bottom-color: #2a2a2a;    
+        }    
+  
+        html[data-theme="dark"] .javdb-setting-label {    
+            color: #ddd;    
+        }    
+  
+        html[data-theme="dark"] .javdb-setting-desc {    
+            color: #888;    
+        }    
+  
+        html[data-theme="dark"] .javdb-settings-footer {    
+            border-top-color: #333;    
+        }    
+  
+        html[data-theme="dark"] .javdb-btn {    
+            background: #2a2a2a;    
+            border-color: #444;    
+            color: #ddd;    
+        }    
+  
+        html[data-theme="dark"] .javdb-btn:hover {    
+            background: #333;    
+        }    
+  
+        html[data-theme="dark"] .javdb-btn-primary {    
+            background: #00bfa5;    
+            color: #000;    
+            border-color: #00bfa5;    
+        }    
+  
+        html[data-theme="dark"] .javdb-btn-primary:hover {    
+            background: #00d1b2;    
+        }    
+  
+        html[data-theme="dark"] .javdb-settings-trigger {    
+            background: #00bfa5;    
+            color: #000;    
+        }    
+  
+        html[data-theme="dark"] .javdb-settings-trigger:hover {    
+            background: #00d1b2;    
+        }
+        
+        html[data-theme="dark"] .javdb-toggle.disabled {
+            background: #3a3a3a !important;
+        }
+
+        html[data-theme="dark"] .javdb-toggle.disabled::after {
+            background: #555 !important;
+        }
+
+        html[data-theme="dark"] .javdb-setting-item.is-disabled .javdb-setting-label,
+        html[data-theme="dark"] .javdb-setting-item.is-disabled .javdb-setting-desc {
+            color: #555 !important;
+        }
+        
+        /* 云备份管理弹窗样式 */
+        .javdb-wd-manager-panel {
+            position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            background: white; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+            z-index: 10001; width: 600px; max-height: 80vh; display: none; flex-direction: column;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+        }
+        .javdb-wd-manager-panel.active { display: flex; }
+        .wd-loading, .wd-empty { text-align: center; padding: 30px; color: #999; }
+        .wd-file-list { max-height: 60vh !important; }
+        
+        /* 暗色模式适配 */
+        html[data-theme="dark"] .javdb-wd-manager-panel { background: #1e1e1e; }
+        html[data-theme="dark"] .javdb-wd-manager-panel .javdb-settings-header { border-bottom-color: #333; }
+        html[data-theme="dark"] .javdb-wd-manager-panel h2 { color: #ddd; }
+    `);  
+  
+    // 创建设置面板
+    function createSettingsPanel() {
+        const overlay = document.createElement('div');
+        overlay.className = 'javdb-settings-overlay';  
+  
+        const panel = document.createElement('div');    
+        panel.className = 'javdb-settings-panel';    
+  
+        const settingsConfig = [    
+            { key: 'translation', label: '简体中文翻译', desc: '将繁体中文转换为简体中文' },    
+            { key: 'autoClickAge', label: '自动点击年龄验证', desc: '自动点击"是,我已满18岁"按钮' },    
+            { key: 'hideBanner', label: '隐藏应用推广横幅', desc: '隐藏顶部APP下载推广' },    
+            { key: 'hideVipItems', label: '隐藏会员专属控件', desc: '隐藏‘更多短评需VIP或App查看’提示、原生相关清单、可播放、中字可播放等VIP控件' },
+            { key: 'hideFooter', label: '隐藏页脚导航栏', desc: '隐藏底部导航栏' },    
+            { key: 'hideFloatButtons', label: '隐藏悬浮按钮', desc: '隐藏右下角磁链下载、TOP按钮' },
+            { key: 'hidePaymentLog', label: '隐藏支付记录', desc: '隐藏支付记录链接' },    
+            { key: 'hideVipLink', label: '隐藏成为VIP', desc: '隐藏"成为VIP"链接' },    
+            { key: 'hideFeedback', label: '隐藏反馈入口', desc: '隐藏顶部反馈链接' },    
+            { key: 'hideTheporndude', label: '隐藏ThePornDude', desc: '隐藏ThePornDude链接' },
+            { key: 'hideAISexyGirlfriend', label: '隐藏AI色色女友💋', desc: '隐藏AI色色女友💋链接' },
+            { key: 'hideTopNavExtras', label: '隐藏顶部外部功能区', desc: '隐藏顶部的域名/公告栏和磁链页顶部的官方App/加入TG频道推广按钮' },
+            { key: 'hideSearchKeywords', label: '隐藏热搜关键词列表', desc: '隐藏搜索栏下方的热搜关键词（LUXU、VR、无码流出等）区域' },
+            { key: 'copyButtons', label: '添加复制按钮', desc: '为标题、系列等添加复制按钮' },
+            { key: 'fixVipCover', label: '修复会员封面', desc: '将会员专属封面恢复为普通封面' },    
+            { key: 'showOriginTitle', label: '自动显示原标题', desc: '自动显示影片原标题' },    
+            { key: 'paginationJump', label: '分页样式优化', desc: '为分页样式优化并添加跳转到指定页码功能' },    
+            { key: 'beautifySearchBar', label: '搜索栏美化', desc: '毛玻璃质感搜索栏，独立圆角与主题自适应' },
+            { key: 'openNewTab', label: '新窗口打开链接', desc: '影片/演员等链接及"搜索"在新窗口打开；底部分页保持当前页跳转，防标签页爆炸' },
+            { key: 'linkRewrite', label: '链接域名重写', desc: '自动重写为最新可用域名' },    
+            { key: 'retryButton', label: '显示重试按钮', desc: '显示手动重新翻译按钮（依赖「简体中文翻译」开关）' },
+            { key: 'autoReload503', label: '503自动重载', desc: '检测到"503 Service Temporarily Unavailable"错误页时自动重载重试（限次防死循环）' },
+            { key: 'downloadMark', label: '已下载标记', desc: '列表页封面添加✓标记按钮，并提供已下载列表（查看/添加/编辑/删除）' },
+            { key: 'loadReviews', label: '评论与磁链增强', desc: '补全原生短评用户名&具体发表时间、追加第三方评论，并隐藏"更多短评需VIP"提示，同时对磁链列表进行卡片化排版美化' },
+            { key: 'loadRelated', label: '相关清单增强', desc: '在短评旁创建独立"相关清单"标签，通过API加载清单列表，支持分页加载' },
+        ];    
+  
+        panel.innerHTML = `
+            <div class="javdb-settings-header">
+                <h2>⚙️ JavDB 增强助手设置</h2>
+                <button class="javdb-settings-close">×</button>
+            </div>
+            <div class="javdb-settings-body">
+                ${settingsConfig.map(item => {
+                    const isRetry = item.key === 'retryButton';
+                    const disabled = isRetry && !config.translation;
+                    return `
+                    <div class="javdb-setting-item ${disabled ? 'is-disabled' : ''}" data-key="${item.key}">
+                        <div class="javdb-setting-head">
+                            <span class="javdb-setting-label">${item.label}</span>
+                            <div class="javdb-toggle ${config[item.key] ? 'active' : ''} ${disabled ? 'disabled' : ''}" data-key="${item.key}"></div>
+                        </div>
+                        <div class="javdb-setting-desc">${item.desc}</div>
+                    </div>`;
+                }).join('')}
+            </div>
+            <div class="javdb-settings-section">
+                <h3>💾 数据备份与恢复</h3>
+                <p>包含：功能开关设置、已下载标记列表（含链接/系列）</p>
+                <div style="display: flex; gap: 10px; margin-bottom: 15px;">
+                    <button class="javdb-btn" id="javdb-export-btn">📥 导出本地备份</button>
+                    <button class="javdb-btn" id="javdb-import-btn">📤 导入本地备份</button>
+                    <input type="file" id="javdb-import-file" accept=".json" style="display: none;">
+                </div>
+                
+                <h4>☁️ WebDAV 云备份</h4>
+                <div style="display: flex; flex-direction: column; gap: 8px;">
+                    <input type="text" class="javdb-input" id="webdav-url" placeholder="WebDAV 地址 (如 https://dav.jianguoyun.com/dav/)">
+                    <div style="display: flex; gap: 8px;">
+                        <input type="text" class="javdb-input" id="webdav-user" placeholder="用户名">
+                        <input type="password" class="javdb-input" id="webdav-pass" placeholder="密码">
+                    </div>
+                    <input type="text" class="javdb-input" id="webdav-dir" placeholder="备份目录 (默认 JavDB 增强助手-数据备份，可留空)">
+                    <div style="display: flex; gap: 10px;">
+                        <button class="javdb-btn javdb-btn-primary" id="webdav-upload-btn">上传到 WebDAV</button>
+                        <button class="javdb-btn" id="webdav-manage-btn">查看云记录</button>
+                        <button class="javdb-btn" id="webdav-save-cfg-btn">保存配置</button>
+                    </div>
+                    <p style="font-size: 11px; color: #999; margin-top: 5px;">* 若 WebDAV 请求失败，请检查网络、账号密码，或确认脚本头部已添加 @connect 您的 WebDAV 域名。</p>
+                </div>
+            </div>
+            <div class="javdb-settings-footer">    
+                <button class="javdb-btn" id="javdb-reset-btn">恢复默认</button>    
+                <button class="javdb-btn javdb-btn-primary" id="javdb-save-btn">保存并刷新</button>    
+            </div>    
+        `;    
+  
+        document.body.appendChild(overlay);    
+        document.body.appendChild(panel);    
+  
+        // 事件绑定    
+        overlay.onclick = () => {    
+            panel.classList.remove('active');    
+            overlay.classList.remove('active');    
+        };    
+  
+        panel.querySelector('.javdb-settings-close').onclick = () => {    
+            panel.classList.remove('active');    
+            overlay.classList.remove('active');    
+        };    
+  
+        // 更新重试按钮的禁用视觉状态（不改变实际配置值）
+        function updateRetryButtonDisabledState(panelEl) {
+            const retryToggle = panelEl.querySelector('.javdb-toggle[data-key="retryButton"]');
+            const retryRow = panelEl.querySelector('.javdb-setting-item[data-setting-key="retryButton"]');
+            if (!retryToggle || !retryRow) return;
+            if (!config.translation) {
+                retryToggle.classList.add('disabled');
+                retryRow.classList.add('is-disabled');
+            } else {
+                retryToggle.classList.remove('disabled');
+                retryRow.classList.remove('is-disabled');
+            }
+        }
+
+        panel.querySelectorAll('.javdb-toggle').forEach(toggle => {
+            toggle.onclick = function() {
+                const key = this.getAttribute('data-key');
+                // 禁用状态下不允许点击
+                if (this.classList.contains('disabled')) return;
+                this.classList.toggle('active');
+                config[key] = this.classList.contains('active');
+                // 切换翻译开关时联动更新重试按钮视觉状态
+                if (key === 'translation') {
+                    updateRetryButtonDisabledState(panel);
+                }
+            };
+        });
+
+        // 初始化时执行一次联动状态更新
+        updateRetryButtonDisabledState(panel);
+  
+        panel.querySelector('#javdb-reset-btn').onclick = () => {    
+            if (confirm('确定要恢复默认设置吗？')) {    
+                config = Object.assign({}, DEFAULT_CONFIG);    
+                saveConfig();    
+                location.reload();    
+            }    
+        };    
+  
+        panel.querySelector('#javdb-save-btn').onclick = () => {    
+            saveConfig();    
+            alert('设置已保存！页面将刷新以应用新设置。');    
+            location.reload();    
+        };
+        
+        // --- 备份功能事件绑定（防 null 安全版） ---
+        const getVal = (id, def = '') => {
+            const el = panel.querySelector(id);
+            return el ? el.value : def;
+        };
+        const setVal = (id, v) => {
+            const el = panel.querySelector(id);
+            if (el) el.value = v;
+        };
+
+        panel.querySelector('#javdb-export-btn').onclick = exportBackup;
+        panel.querySelector('#javdb-import-btn').onclick = () => panel.querySelector('#javdb-import-file').click();
+        panel.querySelector('#javdb-import-file').onchange = (e) => {
+            if (e.target.files.length > 0) importBackup(e.target.files[0]);
+        };
+
+        // 回显已保存的 WebDAV 配置
+        const wdCfg = loadWebDavConfig();
+        setVal('#webdav-url', wdCfg.url || '');
+        setVal('#webdav-user', wdCfg.user || '');
+        setVal('#webdav-pass', wdCfg.pass || '');
+        setVal('#webdav-dir', wdCfg.dir || ''); // 输入框保持留空，默认名仅作内部兜底
+
+        panel.querySelector('#webdav-save-cfg-btn').onclick = () => {
+            saveWebDavConfig({
+                url: getVal('#webdav-url'),
+                user: getVal('#webdav-user'),
+                pass: getVal('#webdav-pass'),
+                dir: getVal('#webdav-dir')
+            });
+            alert('WebDAV 配置已保存');
+        };
+
+        panel.querySelector('#webdav-upload-btn').onclick = async () => {
+            const url = getVal('#webdav-url');
+            const user = getVal('#webdav-user');
+            const pass = getVal('#webdav-pass');
+            const dir = getVal('#webdav-dir') || 'JavDB 增强助手-数据备份';
+            const file = getBackupFileName(); // 强制自动生成带时间的文件名，不再支持自定义
+            if (!url || !user || !pass) return alert('请填写完整的 WebDAV 信息');
+
+            const btn = panel.querySelector('#webdav-upload-btn');
+            btn.disabled = true; btn.textContent = '上传中...';
+            try {
+                await uploadToWebDav(url, dir, file, getBackupData(), user, pass);
+                alert('上传成功！');
+                refreshWebDavManagerList(); // 云记录窗口开着时实时刷新列表
+            } catch (e) {
+                alert('上传失败: ' + e.message);
+            } finally {
+                btn.disabled = false; btn.textContent = '上传到 WebDAV';
+            }
+        };
+
+        panel.querySelector('#webdav-manage-btn').onclick = async () => {
+            const url = getVal('#webdav-url');
+            const user = getVal('#webdav-user');
+            const pass = getVal('#webdav-pass');
+            const dir = getVal('#webdav-dir') || 'JavDB 增强助手-数据备份';
+            if (!url || !user || !pass) return alert('请先填写并保存完整的 WebDAV 信息');
+            
+            // 打开云备份管理弹窗
+            showWebDavManager(url, user, pass, dir);
+        };
+  
+        return { panel, overlay };    
+    }  
+
+    // 云备份管理器状态（记录当前连接信息，供实时刷新使用）
+    let wdManagerState = null;
+
+    // 云备份管理弹窗逻辑
+    async function showWebDavManager(url, user, pass, dir) {
+        wdManagerState = { url, user, pass, dir };
+
+        let overlay = document.getElementById('wd-manager-overlay');
+        let panel = document.getElementById('wd-manager-panel');
+        
+        if (!overlay) {
+            overlay = document.createElement('div');
+            overlay.id = 'wd-manager-overlay';
+            overlay.className = 'javdb-settings-overlay active';
+            
+            panel = document.createElement('div');
+            panel.id = 'wd-manager-panel';
+            panel.className = 'javdb-wd-manager-panel active';
+            
+            document.body.appendChild(overlay);
+            document.body.appendChild(panel);
+            
+            overlay.onclick = () => {
+                overlay.classList.remove('active');
+                panel.classList.remove('active');
+            };
+        } else {
+            overlay.classList.add('active');
+            panel.classList.add('active');
+        }
+        
+        panel.innerHTML = `
+            <div class="javdb-settings-header">
+                <h2>☁️ 云备份记录 (${dir})</h2>
+                <div style="display: flex; gap: 6px; align-items: center;">
+                    <button class="javdb-btn wd-refresh-btn" title="刷新列表" style="padding: 2px 10px;">🔄</button>
+                    <button class="javdb-settings-close wd-close">×</button>
+                </div>
+            </div>
+            <div class="javdb-settings-body wd-list-container" style="flex: 1; overflow-y: auto;">
+                <div class="wd-loading">正在检查目录并加载文件列表...</div>
+                <ul class="watched-list wd-file-list"></ul>
+                <div class="wd-empty" style="display:none;">该目录下暂无备份文件</div>
+            </div>
+        `;
+        
+        panel.querySelector('.wd-close').onclick = () => {
+            overlay.classList.remove('active');
+            panel.classList.remove('active');
+        };
+        panel.querySelector('.wd-refresh-btn').onclick = () => refreshWebDavManagerList();
+        
+        await refreshWebDavManagerList();
+    }
+
+    // 刷新云备份列表（上传成功后自动调用；窗口未打开时自动跳过）
+    async function refreshWebDavManagerList() {
+        const panel = document.getElementById('wd-manager-panel');
+        // 仅当窗口存在且处于打开状态时才刷新
+        if (!panel || !wdManagerState || !panel.classList.contains('active')) return;
+        
+        const { url, user, pass, dir } = wdManagerState;
+        const listEl = panel.querySelector('.wd-file-list');
+        const loadingEl = panel.querySelector('.wd-loading');
+        const emptyEl = panel.querySelector('.wd-empty');
+        if (!listEl || !loadingEl || !emptyEl) return;
+        
+        // 重置 UI 状态
+        listEl.innerHTML = '';
+        emptyEl.style.display = 'none';
+        loadingEl.style.display = 'block';
+        loadingEl.textContent = '正在加载文件列表...';
+        loadingEl.style.color = '';
+        
+        try {
+            await ensureWebDavDir(url, dir, user, pass);
+            const files = await listWebDavFiles(url, dir, user, pass);
+            loadingEl.style.display = 'none';
+            
+            if (files.length === 0) {
+                emptyEl.style.display = 'block';
+                return;
+            }
+            
+            files.forEach(file => {
+                const li = document.createElement('li');
+                li.className = 'watched-item';
+                li.innerHTML = `
+                    <div style="display: flex; justify-content: space-between; width: 100%; align-items: center;">
+                        <div style="flex: 1; min-width: 0;">
+                            <div class="watched-code" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${file.name}">${file.name}</div>
+                            <div class="watched-info-row" style="margin-top: 4px;">
+                                <span>📅 ${file.timeStr}</span>
+                                <span>📦 ${(file.size / 1024).toFixed(1)} KB</span>
+                            </div>
+                        </div>
+                        <div class="watched-actions">
+                            <button class="javdb-btn javdb-btn-primary wd-restore-btn">恢复</button>
+                            <button class="javdb-btn wd-delete-btn" style="color: #f14668; border-color: #f14668;">删除</button>
+                        </div>
+                    </div>
+                `;
+                
+                li.querySelector('.wd-restore-btn').onclick = async () => {
+                    if (!confirm(`确定要从云端恢复 "${file.name}" 吗？当前配置将被覆盖。`)) return;
+                    const btn = li.querySelector('.wd-restore-btn');
+                    btn.disabled = true; btn.textContent = '恢复中...';
+                    try {
+                        const text = await downloadFromWebDav(url, dir, file.name, user, pass);
+                        applyBackupData(JSON.parse(text));
+                        alert('恢复成功！页面将刷新。');
+                        location.reload();
+                    } catch (e) {
+                        alert('恢复失败: ' + e.message);
+                        btn.disabled = false; btn.textContent = '恢复';
+                    }
+                };
+                
+                li.querySelector('.wd-delete-btn').onclick = async () => {
+                    if (!confirm(`确定要从云端永久删除 "${file.name}" 吗？此操作不可逆！`)) return;
+                    const btn = li.querySelector('.wd-delete-btn');
+                    btn.disabled = true; btn.textContent = '删除中...';
+                    try {
+                        await deleteWebDavFile(url, dir, file.name, user, pass);
+                        li.remove();
+                        if (listEl.children.length === 0) emptyEl.style.display = 'block';
+                    } catch (e) {
+                        alert('删除失败: ' + e.message);
+                        btn.disabled = false; btn.textContent = '删除';
+                    }
+                };
+                
+                listEl.appendChild(li);
+            });
+        } catch (e) {
+            loadingEl.textContent = '加载失败: ' + e.message;
+            loadingEl.style.color = '#f14668';
+        }
+    }
+
+    // 创建设置触发按钮
+    function createSettingsTrigger(panel, overlay) {
+        const trigger = document.createElement('button');
+        trigger.className = 'javdb-settings-trigger';
+        trigger.textContent = '⚙️ 设置';
+        trigger.onclick = () => {
+            panel.classList.add('active');
+            overlay.classList.add('active');
+        };
+        document.body.appendChild(trigger);
+    }  
+  
+    // ==================== 功能实现 ====================  
+    // CSS样式注入（根据配置动态生成）
+    function injectStyles() {
+        let styles = '';  
+  
+        // 🚀 融合功能：开启“评论与磁链增强”时，隐藏 VIP 提示 + 短评与磁链独立美化
+        if (config.loadReviews) {
+            styles += `
+                /* 隐藏 JavDB 原生的 VIP 短评提示行 */
+                .review-item.more.has-text-link { display: none !important; }
+            `;
+        }
+
+        // ================= 短评区专属美化 (严格限制作用域，绝不污染磁链) =================
+        styles += `
+            #reviews dl.review-items { margin-top: 12px; }
+            
+            /* 短评卡片化（原生 + 第三方追加共用） */
+            #reviews dl.review-items dt.review-item,
+            #reviews-container dt.review-item,
+            dt.ht-review-appended {
+                padding: 12px 16px;
+                margin: 0 0 10px 0;
+                border-radius: 8px;
+                background: rgba(128,128,128,0.05);
+                border: 1px solid rgba(128,128,128,0.12);
+                transition: background .2s ease, border-color .2s ease, box-shadow .2s ease;
+            }
+            #reviews dl.review-items dt.review-item:hover,
+            #reviews-container dt.review-item:hover,
+            dt.ht-review-appended:hover {
+                background: rgba(128,128,128,0.09);
+                box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+            }
+            
+            /* 短评暗色模式适配 */
+            html[data-theme="dark"] #reviews dl.review-items dt.review-item,
+            html[data-theme="dark"] #reviews-container dt.review-item,
+            html[data-theme="dark"] dt.ht-review-appended {
+                background: rgba(255,255,255,0.04);
+                border-color: rgba(255,255,255,0.08);
+            }
+            html[data-theme="dark"] #reviews dl.review-items dt.review-item:hover,
+            html[data-theme="dark"] #reviews-container dt.review-item:hover,
+            html[data-theme="dark"] dt.ht-review-appended:hover {
+                background: rgba(255,255,255,0.08);
+                box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+            }
+
+            /* 短评内部元素微调 */
+            #reviews dl.review-items .review-title, #reviews-container .review-title { line-height: 1.9; }
+            #reviews dl.review-items .review-title .time, #reviews-container .review-title .time { color: #999; font-size: 12px; margin-left: 6px; }
+            html[data-theme="dark"] #reviews dl.review-items .review-title .time,
+            html[data-theme="dark"] #reviews-container .review-title .time { color: #777; }
+            
+            #reviews dl.review-items .likes .button, #reviews-container .likes .button { display: inline-flex; align-items: center; }
+            #reviews dl.review-items .likes .button .likes-count, #reviews-container .likes .button .likes-count { margin-left: 5px; font-weight: 600; }
+            .ht-static-like { pointer-events: none; }
+
+            /* 第三方评论专属标识 */
+            dt.ht-review-appended { border-left: 3px solid #3273dc; }
+            html[data-theme="dark"] dt.ht-review-appended { border-left-color: #00d1b2; }
+            .ht-third-tag {
+                display: inline-block; height: 18px; line-height: 18px; padding: 0 6px;
+                margin-left: 4px; border-radius: 4px; font-size: 11px; vertical-align: 2px;
+                background: rgba(50,115,220,0.12); color: #3273dc;
+            }
+            html[data-theme="dark"] .ht-third-tag { background: rgba(0,209,178,0.15); color: #00d1b2; }
+            .ht-stars { color: #f4b731; letter-spacing: 1px; margin-left: 4px; }
+            
+            #reviews dl.review-items .content, #reviews-container .content { margin-top: 6px; }
+            #reviews dl.review-items .content p, #reviews-container .content p { margin: 0; line-height: 1.7; word-break: break-word; }
+        `;
+
+        // ================= 磁链区专属美化 (严格限制在 #magnets-content 内) =================
+        styles += `
+            #magnets-content {
+                display: flex;
+                flex-direction: column;
+                gap: 10px;
+                margin-top: 10px;
+            }
+
+            /* 磁链卡片化（排除广告和排序控件，只作用于 .item） */
+            #magnets-content > .item {
+                padding: 12px 16px;
+                border-radius: 8px;
+                background: rgba(128,128,128,0.04);
+                border: 1px solid rgba(128,128,128,0.12);
+                transition: all 0.2s ease;
+                display: flex;
+                flex-wrap: wrap;
+                align-items: center;
+                gap: 12px;
+            }
+            #magnets-content > .item:hover {
+                background: rgba(128,128,128,0.08);
+                border-color: rgba(128,128,128,0.25);
+                box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+            }
+            
+            /* 磁链暗色模式适配 */
+            html[data-theme="dark"] #magnets-content > .item {
+                background: rgba(255,255,255,0.03);
+                border-color: rgba(255,255,255,0.08);
+            }
+            html[data-theme="dark"] #magnets-content > .item:hover {
+                background: rgba(255,255,255,0.07);
+                border-color: rgba(255,255,255,0.15);
+                box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+            }
+
+            /* 磁链名称区（自适应占据剩余空间） */
+            #magnets-content > .item .magnet-name {
+                flex: 1 1 auto;
+                min-width: 200px;
+            }
+            #magnets-content > .item .magnet-name a {
+                display: flex;
+                flex-wrap: wrap;
+                align-items: center;
+                gap: 8px;
+                color: inherit;
+                text-decoration: none;
+            }
+            #magnets-content > .item .magnet-name .name {
+                font-weight: 600;
+                font-size: 14px;
+                color: #333;
+                word-break: break-all;
+            }
+            html[data-theme="dark"] #magnets-content > .item .magnet-name .name { color: #e0e0e0; }
+            
+            #magnets-content > .item .magnet-name .meta {
+                font-size: 12px;
+                color: #888;
+            }
+            html[data-theme="dark"] #magnets-content > .item .magnet-name .meta { color: #999; }
+
+            /* 磁链日期区 */
+            #magnets-content > .item .date {
+                flex: 0 0 auto;
+                font-size: 13px;
+                color: #666;
+            }
+            html[data-theme="dark"] #magnets-content > .item .date { color: #aaa; }
+
+            /* 磁链按钮区 */
+            #magnets-content > .item .buttons {
+                flex: 0 0 auto;
+                display: flex;
+                gap: 6px;
+            }
+            #magnets-content > .item .buttons .button {
+                font-size: 12px;
+                padding: 4px 10px;
+                height: auto;
+                border-radius: 4px;
+            }
+        `;
+        
+        // 🚀 相关清单增强样式（受 loadRelated 开关控制）
+            if (config.loadRelated) {
+                styles += `
+                /* 自定义 Tab 样式融合 */
+                .ht-related-tab-li a { cursor: pointer; }
+                .ht-related-tab-li.is-active a {
+                    color: #3273dc !important;
+                    border-bottom-color: #3273dc !important;
+                }
+                html[data-theme="dark"] .ht-related-tab-li.is-active a {
+                    color: #00d1b2 !important;
+                    border-bottom-color: #00d1b2 !important;
+                }
+                
+                /* 独立内容面板 */
+                .ht-related-content-panel {
+                    margin-top: 20px;
+                    padding: 15px;
+                    border: 1px solid rgba(128,128,128,0.15);
+                    border-radius: 8px;
+                    background: rgba(128,128,128,0.02);
+                }
+                html[data-theme="dark"] .ht-related-content-panel {
+                    border-color: rgba(255,255,255,0.1);
+                    background: rgba(255,255,255,0.02);
+                }
+        
+                /* 列表项样式 */
+                .ht-related-item {
+                    padding: 10px 0;
+                    border-bottom: 1px solid rgba(128,128,128,0.1);
+                }
+                .ht-related-item:last-child { border-bottom: none; }
+                .ht-related-item-title {
+                    display: flex;
+                    align-items: baseline;
+                    gap: 8px;
+                }
+                .ht-related-index {
+                    color: #999;
+                    font-size: 12px;
+                    flex-shrink: 0;
+                }
+                .ht-related-item-title a {
+                    color: #3273dc;
+                    text-decoration: none;
+                    font-weight: 500;
+                    font-size: 14px;
+                    overflow: hidden;
+                    text-overflow: ellipsis;
+                    white-space: nowrap;
+                }
+                .ht-related-item-title a:hover { text-decoration: underline; }
+                .ht-related-meta {
+                    display: flex;
+                    gap: 16px;
+                    margin-top: 4px;
+                    font-size: 12px;
+                    color: #888;
+                    flex-wrap: wrap;
+                }
+                .ht-related-load-more {
+                    display: block;
+                    width: 100%;
+                    padding: 10px;
+                    margin-top: 10px;
+                    border: 1px solid #ddd;
+                    border-radius: 6px;
+                    background: #f9f9f9;
+                    cursor: pointer;
+                    font-size: 13px;
+                    text-align: center;
+                    transition: background 0.2s;
+                }
+                .ht-related-load-more:hover { background: #eee; }
+                .ht-related-empty, .ht-related-loading {
+                    text-align: center;
+                    color: #999;
+                    padding: 20px 0;
+                    font-size: 13px;
+                }
+                
+                /* 暗色模式适配 */
+                html[data-theme="dark"] .ht-related-item { border-bottom-color: rgba(255,255,255,0.08); }
+                html[data-theme="dark"] .ht-related-item-title a { color: #00d1b2; }
+                html[data-theme="dark"] .ht-related-meta { color: #999; }
+                html[data-theme="dark"] .ht-related-load-more { background: #2a2a2a; border-color: #444; color: #ccc; }
+                html[data-theme="dark"] .ht-related-load-more:hover { background: #333; }
+                `;
+            }
+        
+        // 🚀 搜索栏深度美化（受 beautifySearchBar 开关控制）
+        if (config.beautifySearchBar) {
+            styles += `
+                /* 核心修复：隐藏网站自带 has-left-sep 左侧分隔竖线（美化加间距后它会悬空暴露） */
+                .search-panel .control.has-left-sep {
+                    border-left: none !important;
+                    padding-left: 0 !important;
+                    margin-left: 0 !important;
+                }
+                .search-panel .control.has-left-sep::before,
+                .search-panel .control.has-left-sep::after {
+                    display: none !important;
+                    content: none !important;
+                }
+                /* 整体容器：毛玻璃背景与悬浮阴影 */
+                .search-bar-wrap {
+                    padding: 12px 16px !important;
+                    background: rgba(255, 255, 255, 0.65);
+                    backdrop-filter: blur(12px);
+                    -webkit-backdrop-filter: blur(12px);
+                    border-radius: 16px !important;
+                    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.04), 0 2px 8px rgba(0, 0, 0, 0.02);
+                    border: 1px solid rgba(255, 255, 255, 0.8);
+                    transition: all 0.3s ease;
+                }
+                /* 强制使用 flex 布局并增加间距，打破 Bulma 默认的紧凑粘连 */
+                .search-panel.field.has-addons {
+                    display: flex !important;
+                    align-items: center !important;
+                    gap: 8px !important;
+                    margin-bottom: 0 !important;
+                }
+                .search-panel .control { margin-right: 0 !important; }
+                
+                /* 核心：强制覆盖 Bulma has-addons 的圆角清除机制，让每个组件都有独立圆角 */
+                .search-panel .control .input,
+                .search-panel .control .select select,
+                .search-panel .control .button {
+                    border-radius: 10px !important;
+                    height: 42px !important;
+                    transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+                }
+
+                /* 下拉框样式 */
+                .search-type .select select {
+                    border: 1px solid #e0e0e0;
+                    background-color: #f8f9fa;
+                    font-weight: 500;
+                    color: #4a4a4a;
+                    padding-left: 12px;
+                    padding-right: 30px;
+                }
+                .search-type .select select:hover { border-color: #3273dc; }
+                .search-type .select::after { border-color: #3273dc !important; }
+
+                /* 输入框样式与聚焦发光效果 */
+                .search-input .input {
+                    border: 1px solid #e0e0e0;
+                    background-color: #f8f9fa;
+                    font-size: 15px;
+                    box-shadow: inset 0 1px 2px rgba(0,0,0,0.02);
+                }
+                .search-input .input:focus {
+                    border-color: #3273dc;
+                    background-color: #fff;
+                    box-shadow: 0 0 0 3px rgba(50, 115, 220, 0.15), inset 0 1px 2px rgba(0,0,0,0.02);
+                    outline: none;
+                }
+
+                /* 高级搜索按钮 (次级按钮风格) */
+                .advanced-search .button {
+                    width: 42px !important;
+                    padding: 0 !important;
+                    background: #f8f9fa;
+                    border: 1px solid #e0e0e0;
+                    color: #666;
+                }
+                .advanced-search .button:hover {
+                    background: #e9ecef;
+                    border-color: #3273dc;
+                    color: #3273dc;
+                    transform: translateY(-1px);
+                }
+                .advanced-search .button .icon { margin: 0 !important; font-size: 18px; letter-spacing: 1px; }
+
+                /* 搜索提交按钮 (主色调渐变 + 悬停上浮) */
+                .search-submit .button {
+                    padding: 0 24px !important;
+                    font-weight: 600;
+                    font-size: 15px;
+                    background: linear-gradient(135deg, #3273dc 0%, #2366d1 100%);
+                    border: none !important;
+                    color: #fff;
+                    box-shadow: 0 4px 12px rgba(50, 115, 220, 0.3);
+                }
+                .search-submit .button:hover {
+                    transform: translateY(-2px);
+                    box-shadow: 0 6px 16px rgba(50, 115, 220, 0.45);
+                    background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+                }
+                .search-submit .button:active {
+                    transform: translateY(0);
+                    box-shadow: 0 2px 6px rgba(50, 115, 220, 0.3);
+                }
+
+                /* ============ 暗色模式完美适配 ============ */
+                html[data-theme="dark"] .search-bar-wrap {
+                    background: rgba(30, 30, 30, 0.65);
+                    border: 1px solid rgba(255, 255, 255, 0.05);
+                    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+                }
+                html[data-theme="dark"] .search-type .select select,
+                html[data-theme="dark"] .search-input .input,
+                html[data-theme="dark"] .advanced-search .button {
+                    background-color: #2a2a2a;
+                    border-color: #444;
+                    color: #ddd;
+                }
+                html[data-theme="dark"] .search-input .input:focus {
+                    background-color: #333;
+                    border-color: #00d1b2;
+                    box-shadow: 0 0 0 3px rgba(0, 209, 178, 0.2);
+                }
+                html[data-theme="dark"] .search-type .select::after { border-color: #00d1b2 !important; }
+                html[data-theme="dark"] .advanced-search .button:hover {
+                    background: #333;
+                    border-color: #00d1b2;
+                    color: #00d1b2;
+                }
+                html[data-theme="dark"] .search-submit .button {
+                    background: linear-gradient(135deg, #00d1b2 0%, #00bfa5 100%);
+                    color: #000;
+                    box-shadow: 0 4px 12px rgba(0, 209, 178, 0.2);
+                }
+                html[data-theme="dark"] .search-submit .button:hover {
+                    background: linear-gradient(135deg, #00e6c3 0%, #00d1b2 100%);
+                    box-shadow: 0 6px 16px rgba(0, 209, 178, 0.35);
+                }
+            `;
+        }
+  
+        // 立即通过 CSS 隐藏应用推广横幅（彻底隐藏），防止刷新时短暂显示    
+        if (config.hideBanner) {    
+            styles += "nav.app-desktop-banner { display: none !important; }";    
+        }
+
+        // 立即通过 CSS 隐藏年龄验证弹窗（透明化、禁止用户交互），防止新开标签页时短暂显示    
+        if (config.autoClickAge) {    
+            styles += "div.modal.is-active.over18-modal { opacity: 0 !important; pointer-events: none !important; }";    
+        }    
+  
+        // 立即通过 CSS 隐藏会员专属控件相关清单、可播放、中字可播放（彻底隐藏），防止刷新时短暂显示
+        if (config.hideVipItems) {    
+            styles += `
+                li[data-movie-tab-target="listTab"] { display: none !important; }
+                li > a[href*="?f=playable"] { display: none !important; }
+                a.button.is-small[href*="vft=4"][href*="vst=3"] { display: none !important; }
+                a.button.is-small[href*="vft=5"][href*="vst=3"] { display: none !important; }
+            `;
+            // 当"评论与磁链增强"开启时，不隐藏‘更多短评需VIP或App查看’控件
+            if (!config.loadReviews) {    
+                styles += "dt.review-item.more.has-text-link { display: none !important; }";    
+            }
+        }    
+  
+        // 立即通过 CSS 隐藏页脚导航栏（彻底隐藏），防止刷新时短暂显示    
+        if (config.hideFooter) {    
+            styles += "nav#footer.navbar { display: none !important; }";    
+        }    
+  
+        // 立即通过 CSS 隐藏右下角悬浮按钮"磁链下载"、"TOP"（彻底隐藏），防止刷新时短暂显示    
+        if (config.hideFloatButtons) {    
+            styles += "div.float-buttons { display: none !important; }";    
+        }
+  
+        // 立即通过 CSS 隐藏支付记录链接（彻底隐藏），防止刷新时短暂显示    
+        if (config.hidePaymentLog) {    
+            styles += 'a[href="/users/transaction_logs"] { display: none !important; }';    
+        }    
+  
+        // 立即通过 CSS 隐藏成为VIP及其前缀逗号和空格（彻底隐藏），防止刷新时短暂显示    
+        if (config.hideVipLink) {    
+            styles += 'a[href="/plans"]{display:none!important}';    
+        }    
+  
+        // 立即通过 CSS 隐藏顶部"反馈"入口（彻底隐藏），防止刷新时短暂显示    
+        if (config.hideFeedback) {    
+            styles += 'a[href="/feedbacks/new"] { display: none !important; }';    
+        }    
+  
+        // 立即通过 CSS 隐藏顶部"ThePornDude"入口（彻底隐藏），防止刷新时短暂显示    
+        if (config.hideTheporndude) {    
+            styles += 'a[href="https://theporndude.com/zh"] { display: none !important; }';    
+        }
+        
+        // 立即通过 CSS 隐藏顶部"AI色色女友💋"入口（彻底隐藏），防止刷新时短暂显示    
+        if (config.hideAISexyGirlfriend) {
+            document.querySelectorAll('a.navbar-item').forEach(a => {
+                if (a.textContent.includes('AI色色女友')) {
+                    a.style.display = 'none';
+                }
+            });
+        }
+        
+        // 立即通过 CSS 隐藏顶部全局条和磁链页顶部功能区（彻底隐藏），防止刷新时短暂显示
+        if (config.hideTopNavExtras) {
+            styles += `
+                /* 顶部全局条：域名、App、公告 */
+                nav.sub-header { display: none !important; }
+                /* 磁链页顶部功能区：官方App/加入TG频道推广按钮 */
+                div.top-meta { display: none !important; }
+            `;
+        }
+  
+        // 立即通过 CSS 隐藏搜索栏下方的热搜关键词区域（彻底隐藏），防止刷新时短暂显示
+        if (config.hideSearchKeywords) {
+            styles += `
+                div.search-recent-keywords {
+                    display: none !important;
+                }
+            `;
+        }
+        
+        // 为分页样式优化并添加跳转到指定页码功能，按钮风格自动适配网站主题(light/dark/auto）  
+        if (config.paginationJump) {    
+            styles += `    
+                /* 分页容器样式优化 - 不改变原有结构 */    
+                ul.pagination-list {    
+                    display: flex;    
+                    gap: 6px;    
+                    justify-content: center;    
+                    align-items: center;    
+                    padding: 10px 0;    
+                }    
+      
+                /* 所有分页按钮统一外观（包括移动后的上一页/下一页） */    
+                .pagination-link {    
+                    padding: 6px 12px;    
+                    border-radius: 8px;    
+                    border: 1px solid #ddd;    
+                    color: #333;    
+                    background-color: #fff;    
+                    transition: all 0.2s ease;    
+                    font-weight: 500;    
+                    font-size: 14px;    
+                }    
+      
+                /* 鼠标悬停效果 */    
+                .pagination-link:hover {    
+                    background-color: #f0f0f0;    
+                    border-color: #bbb;    
+                    color: #111;    
+                }    
+      
+                /* 当前页样式突出 */    
+                .pagination-link.is-current {    
+                    background-color: #3273dc !important;    
+                    color: white !important;    
+                    border-color: #3273dc !important;    
+                    font-weight: bold;    
+                    box-shadow: 0 2px 6px rgba(50,115,220,0.3);    
+                    cursor: default;    
+                }    
+      
+                /* 省略号样式微调 */    
+                .pagination-ellipsis {    
+                    color: #888;    
+                    padding: 0 6px;    
+                    font-size: 16px;    
+                    user-select: none;    
+                }    
+      
+                /* 跳页输入框样式 */    
+                .pagination-jump {    
+                    display: flex;    
+                    align-items: center;    
+                    gap: 6px;    
+                    margin-left: 10px;    
+                }    
+      
+                .pagination-jump input {    
+                    width: 60px;    
+                    padding: 5px 6px;    
+                    border: 1px solid #ccc;    
+                    border-radius: 6px;    
+                    font-size: 14px;    
+                    outline: none;    
+                }    
+      
+                .pagination-jump button {    
+                    padding: 5px 10px;    
+                    font-size: 14px;    
+                    border: 1px solid #ccc;    
+                    border-radius: 6px;    
+                    background-color: #f5f5f5;    
+                    cursor: pointer;    
+                    transition: background-color 0.2s;    
+                }    
+      
+                .pagination-jump button:hover {    
+                    background-color: #e0e0e0;    
+                }    
+      
+                /* 隐藏原位置的上一页/下一页按钮（因为我们会移动它们到ul中） */    
+                .pagination-previous:not(.pagination-link),    
+                .pagination-next:not(.pagination-link) {    
+                    display: none !important;    
+                }    
+      
+                /* 移动后的上一页/下一页按钮样式统一（添加 .pagination-link 类后生效） */    
+                .pagination-previous.pagination-link,    
+                .pagination-next.pagination-link {    
+                    margin: 0 3px; /* 紧邻跳转按钮和彼此 */    
+                }    
+      
+                /* 暗色模式适配（自动检测） */    
+                @media (prefers-color-scheme: dark) {    
+                    .pagination-link {    
+                        background-color: #1e1e1e;    
+                        color: #ddd;    
+                        border-color: #444;    
+                    }    
+      
+                    .pagination-link:hover {    
+                        background-color: #2a2a2a;    
+                        border-color: #555;    
+                        color: #fff;    
+                    }    
+      
+                    .pagination-link.is-current {    
+                        background-color: #00bfa5 !important;    
+                        color: black !important;    
+                        border-color: #00bfa5 !important;    
+                    }    
+      
+                    .pagination-ellipsis {    
+                        color: #aaa;    
+                    }    
+      
+                    .pagination-jump input {    
+                        background-color: #2c2c2c;    
+                        color: #ddd;    
+                        border-color: #555;    
+                    }
+                    .pagination-jump button {    
+                        background-color: #444;    
+                        color: #ccc;    
+                        border-color: #666;    
+                    }
+                    .pagination-jump button:hover {    
+                        background-color: #555;    
+                        color: #fff;    
+                    }    
+                }    
+            `;    
+        }    
+  
+        // 手动翻译按钮样式    
+        if (config.retryButton) {    
+            styles += `    
+                /* 手动翻译按钮样式 */    
+                .translate-retry-btn {    
+                    position: fixed;    
+                    right: 20px;    
+                    bottom: 20px;    
+                    background-color: #3273dc;    
+                    color: white;    
+                    border: none;    
+                    border-radius: 4px;    
+                    padding: 8px 12px;    
+                    font-size: 14px;    
+                    cursor: pointer;    
+                    z-index: 9999;    
+                    box-shadow: 0 2px 5px rgba(0,0,0,0.2);    
+                    transition: all 0.3s ease;    
+                }
+                .translate-retry-btn:hover {    
+                    background-color: #2366d1;    
+                    transform: translateY(-2px);    
+                    box-shadow: 0 4px 8px rgba(0,0,0,0.3);    
+                }
+                .translate-retry-btn.success {    
+                    background-color: #48c774;    
+                }
+                .translate-retry-btn.error {    
+                    background-color: #f14668;    
+                }
+                /* 暗色模式下的手动翻译按钮 */
+                html[data-theme="dark"] .translate-retry-btn {    
+                    background-color: #00d1b2;    
+                    color: #222;    
+                }
+                html[data-theme="dark"] .translate-retry-btn:hover {    
+                    background-color: #00c4a7;    
+                }
+                html[data-theme="dark"] .translate-retry-btn.success {    
+                    background-color: #48c774;    
+                }
+                html[data-theme="dark"] .translate-retry-btn.error {    
+                    background-color: #f14668;    
+                }    
+            `;    
+        }    
+  
+        // 复制按钮样式（自适应暗色/浅色模式按钮样式）    
+        if (config.copyButtons) {    
+            styles += `    
+                .copy-btn {    
+                    background: transparent;    
+                    font-size: 13px;    
+                    border: 1px solid;    
+                    border-radius: 4px;    
+                    padding: 2px 6px;    
+                    margin-left: 10px;    
+                    cursor: pointer;    
+                    transition: all 0.2s ease;    
+                }
+                .copy-btn:hover {    
+                    background: #ddd;    
+                    color: #000;    
+                }
+                html[data-theme="dark"] .copy-btn {    
+                    color: #ccc;    
+                    border-color: #555;    
+                }
+                html[data-theme="dark"] .copy-btn:hover {    
+                    background: #444;    
+                    color: #fff;    
+                }    
+            `;    
+        }
+        
+        // 已下载标记功能及备份面板样式
+        if (config.downloadMark) {
+            styles += `
+                /* 封面标记按钮 */
+                .movie-list .cover { position: relative; }
+                .dl-mark-btn {
+                    position: absolute; top: 6px; right: 6px; z-index: 5;
+                    width: 26px; height: 26px; border-radius: 50%;
+                    border: 1px solid rgba(255,255,255,.6);
+                    background: rgba(0,0,0,.45); color: #fff;
+                    font-size: 14px; line-height: 1; cursor: pointer; padding: 0;
+                    display: flex; align-items: center; justify-content: center;
+                    opacity: .7; transition: all .2s ease;
+                }
+                .dl-mark-btn:hover { opacity: 1; transform: scale(1.1); }
+                .dl-mark-btn.marked { background: #48c774; border-color: #48c774; opacity: .95; }
+                html[data-theme="dark"] .dl-mark-btn.marked { background: #00bfa5; border-color: #00bfa5; color: #000; }
+                /* 详情页标记按钮（尺寸稍大） */
+                .dl-mark-btn-detail { width: 34px; height: 34px; font-size: 18px; top: 10px; right: 10px; }
+
+                /* 已下载列表触发按钮 */
+                .javdb-watched-trigger {
+                    position: fixed; right: 20px; top: 124px;
+                    background: #48c774; color: #fff; border: none; border-radius: 6px;
+                    padding: 10px 15px; font-size: 14px; cursor: pointer; z-index: 9998;
+                    box-shadow: 0 2px 8px rgba(0,0,0,.2); transition: all .3s;
+                }
+                .javdb-watched-trigger:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,.3); }
+                html[data-theme="dark"] .javdb-watched-trigger { background: #00bfa5; color: #000; }
+
+                /* 面板内部通用 */
+                .javdb-input {
+                    padding: 8px 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; outline: none; width: 100%; box-sizing: border-box;
+                }
+                html[data-theme="dark"] .javdb-input { background: #2a2a2a; border-color: #444; color: #ddd; }
+                .javdb-settings-section { padding: 20px; border-top: 1px solid #e0e0e0; }
+                html[data-theme="dark"] .javdb-settings-section { border-top-color: #333; }
+                .javdb-settings-section h3 { margin: 0 0 15px 0; font-size: 16px; color: #333; }
+                .javdb-settings-section h4 { margin: 15px 0 10px 0; font-size: 14px; color: #333; }
+                html[data-theme="dark"] .javdb-settings-section h3, 
+                html[data-theme="dark"] .javdb-settings-section h4 { color: #ddd; }
+                .javdb-settings-section p { font-size: 12px; color: #666; margin-bottom: 10px; }
+                html[data-theme="dark"] .javdb-settings-section p { color: #888; }
+
+                /* 列表管理区 */
+                .watched-add-row, .watched-filter-row { display: flex; gap: 8px; margin-bottom: 10px; }
+                .watched-add-row input, .watched-filter-row input {
+                    flex: 1; padding: 6px 10px; border: 1px solid #ccc; border-radius: 6px;
+                    font-size: 14px; outline: none;
+                }
+                .watched-list { list-style: none; margin: 0; padding: 0; max-height: 45vh; overflow-y: auto; }
+                .watched-item {
+                    display: flex; flex-direction: column; align-items: flex-start; gap: 4px;
+                    padding: 10px 4px; border-bottom: 1px solid #f0f0f0; width: 100%; box-sizing: border-box;
+                }
+                .watched-item:last-child { border-bottom: none; }
+                .watched-code { font-weight: 600; font-family: Consolas, Menlo, monospace; color: #333; word-break: break-all; }
+                .watched-actions { display: flex; gap: 6px; flex-shrink: 0; }
+                .watched-actions .javdb-btn { padding: 4px 10px; font-size: 12px; }
+                .watched-edit-input { width: 140px; padding: 4px 8px; border: 1px solid #ccc; border-radius: 6px; font-size: 13px; }
+                .watched-empty { text-align: center; color: #999; padding: 20px 0; font-size: 13px; }
+
+                .watched-info-row { font-size: 12px; color: #888; display: flex; gap: 10px; flex-wrap: wrap; }
+                .watched-info-row a { color: #3273dc; text-decoration: none; }
+                
+                /* 暗色模式 */
+                html[data-theme="dark"] .watched-add-row input,
+                html[data-theme="dark"] .watched-filter-row input,
+                html[data-theme="dark"] .watched-edit-input { background: #2c2c2c; color: #ddd; border-color: #555; }
+                html[data-theme="dark"] .watched-item { border-bottom-color: #2a2a2a; }
+                html[data-theme="dark"] .watched-code { color: #ddd; }
+                html[data-theme="dark"] .watched-info-row a { color: #00d1b2; }
+            `;
+        }
+  
+        if (styles) {    
+            GM_addStyle(styles);    
+        }    
+    }  
+  
+    // 翻译状态记录
+    let translationStatus = {
+        attempt: 0,
+        lastRun: 0,
+        success: false
+    };  
+  
+    // 繁体到简体的映射
+    const translations = {
+        "常見問題": "常见问题",
+        // 添加更多需要替换的词语
+    };  
+  
+    // 使用逐字符扫描和最长匹配算法替换字符串中的内容
+    function replaceWithMapping(text, mapping) {
+        if (!text) return "";
+        let result = "";
+        let i = 0;
+        while (i < text.length) {
+            let longestMatch = "";
+            let replacement = "";
+            // 遍历所有映射键，找到当前位置最长的匹配
+            for (const key in mapping) {
+                if (text.startsWith(key, i) && key.length > longestMatch.length) {
+                    longestMatch = key;
+                    replacement = mapping[key];
+                }
+            }
+            if (longestMatch) {
+                result += replacement;
+                i += longestMatch.length;
+            } else {
+                result += text[i];
+                i++;
+            }
+        }
+        return result;
+    }  
+  
+    // 遍历页面中的所有文本节点进行替换（跳过谷歌翻译保护的元素）
+    function translateTextNodes(node) {
+        if (!config.translation) return;
+        // 跳过已被谷歌翻译标记保护的元素及其子树
+        if (node.nodeType === Node.ELEMENT_NODE && node.dataset && node.dataset.msProtected === 'true') {
+            return;
+        }
+        if (node.nodeType === Node.TEXT_NODE) {
+            node.nodeValue = replaceWithMapping(node.nodeValue, translations);
+        } else {
+            for (let child of node.childNodes) {
+                translateTextNodes(child);
+            }
+        }
+    } 
+  
+    // 替换输入框的 placeholder 属性
+    function translatePlaceholders() {
+        if (!config.translation) return;
+        const inputs = document.querySelectorAll('input[placeholder], textarea[placeholder]');
+        inputs.forEach(input => {
+            const placeholder = input.getAttribute('placeholder');
+            if (placeholder) {
+                input.setAttribute('placeholder', replaceWithMapping(placeholder, translations));
+            }
+        });
+    }  
+  
+    // 替换网页标题
+    function translateTitle() {
+        if (!config.translation) return;
+        const titleElement = document.querySelector('title');
+        if (titleElement) {
+            titleElement.innerText = replaceWithMapping(titleElement.innerText, translations);
+        }
+    }  
+  
+    // 替换提交按钮的 value 和 data-disable-with 属性
+    function translateButtonValues() {
+        if (!config.translation) return;
+        const buttons = document.querySelectorAll('input[type="submit"], button');
+        buttons.forEach(button => {
+            const value = button.getAttribute('value');
+            if (value) {
+                button.setAttribute('value', replaceWithMapping(value, translations));
+            }
+            const disableWith = button.getAttribute('data-disable-with');
+            if (disableWith) {
+                button.setAttribute('data-disable-with', replaceWithMapping(disableWith, translations));
+            }
+        });
+    }  
+  
+    // 替换所有鼠标悬停提示的 data-tooltip 属性内容
+    function translateTooltipAttributes() {
+        if (!config.translation) return;
+        const elementsWithTooltip = document.querySelectorAll('[data-tooltip]');
+        elementsWithTooltip.forEach(el => {
+            const tooltip = el.getAttribute('data-tooltip');
+            if (tooltip) {
+                el.setAttribute('data-tooltip', replaceWithMapping(tooltip, translations));
+            }
+        });
+    }  
+  
+    // 翻译带有 title 属性的元素（如 a 标签上的鼠标悬停提示）
+    function translateTitleAttributes() {
+        if (!config.translation) return;
+        const elementsWithTitle = document.querySelectorAll('[title]');
+        elementsWithTitle.forEach(el => {
+            const titleAttr = el.getAttribute('title');
+            
+            // 兼容 JAV-JHS脚本: 保留此元素的 'title="複製番號"' 不翻译，确保其脚本能正常工作。
+            if (titleAttr === '複製番號') {
+                return;
+            }
+            
+            if (titleAttr) {
+                el.setAttribute('title', replaceWithMapping(titleAttr, translations));
+            }
+        });
+    }  
+  
+    // 翻译带有 data-confirm 属性的元素（如登出确认提示）
+    function translateDataConfirmAttributes() {
+        if (!config.translation) return;
+        const elementsWithDataConfirm = document.querySelectorAll('[data-confirm]');
+        elementsWithDataConfirm.forEach(el => {
+            const confirmText = el.getAttribute('data-confirm');
+            if (confirmText) {
+                el.setAttribute('data-confirm', replaceWithMapping(confirmText, translations));
+            }
+        });
+    }  
+  
+    // 使用 setInterval 高频检查并极速自动点击年龄验证"是,我已滿18歲"按钮
+    function autoClickAgeVerificationFast() {
+        if (!config.autoClickAge) return;
+        const interval = setInterval(() => {
+            const btn = document.querySelector('div.modal.is-active.over18-modal a.button.is-success.is-large');
+            if (btn) {
+                btn.click();
+                clearInterval(interval);
+            }
+        }, 10); // 每 10 毫秒检查一次
+    }  
+  
+    // 将会员专属的"在线观看"功能封面修复为普通封面
+    function fixMemberExclusiveVideo() {
+        if (!config.fixVipCover) return;
+        document.querySelectorAll('div.column-video-cover').forEach(div => {
+            const a = div.querySelector('a.cover-container');
+            const img = div.querySelector('img.video-cover');
+            if (a && img) {
+                const href = a.getAttribute('href');
+                if (href && href.includes('/play')) { // 只替换包含/play的链接，确保是在线观看
+                    const imgUrl = img.src;
+                    const newA = document.createElement('a');
+                    newA.setAttribute('data-fancybox', 'gallery');
+                    newA.href = imgUrl;
+                    const newImg = document.createElement('img');
+                    newImg.src = imgUrl;
+                    newImg.className = 'video-cover';
+                    newA.appendChild(newImg);
+                    div.innerHTML = '';
+                    div.appendChild(newA);
+                }
+            }
+        });
+    }  
+
+    function createCopyButton(text, contentToCopy) {
+        const btn = document.createElement('button');
+        btn.className = 'copy-btn';
+        btn.textContent = text;
+        btn.title = '点击复制';
+        
+        // 如果提供了固定内容，设置点击事件（用于系列、导演等）
+        if (contentToCopy) {
+            btn.onclick = (e) => {
+                e.stopPropagation();
+                navigator.clipboard.writeText(contentToCopy).then(() => {
+                    const originalText = btn.textContent;
+                    btn.textContent = '✅ 已复制';
+                    setTimeout(() => btn.textContent = originalText, 1000);
+                }).catch(() => {
+                    console.error('复制失败');
+                });
+            };
+        }
+        // 对于标题复制按钮，contentToCopy 为空，点击事件在 addCopyButtons 中单独设置
+        
+        return btn;
+    }
+
+    // 自动恢复原标题，干掉"显示原标题"按钮
+    function fixOriginTitle() {
+        if (!config.showOriginTitle) return;
+        
+        document.querySelectorAll('h2.title.is-4').forEach(h2 => {
+            const showOriginBtn = h2.querySelector('a[data-movie-detail-target="showOriginTitle"]');
+            const originTitleSpan = h2.querySelector('span.origin-title');
+            const currentTitle = h2.querySelector('strong.current-title');
+            
+            if (showOriginBtn && originTitleSpan && currentTitle) {
+                currentTitle.textContent = originTitleSpan.textContent.trim();
+                showOriginBtn.remove();
+                originTitleSpan.remove();
+            }
+        });
+    }
+
+    // 添加复制按钮功能（自适应暗色/浅色模式按钮样式）
+    function addCopyButtons() {
+        if (!config.copyButtons) return;
+        
+        // 标题结构（番号+标题）- 只在没有复制按钮时才创建
+        const titleH2 = document.querySelector('h2.title.is-4');
+        const idStrong = titleH2 ? titleH2.querySelector('strong:first-child') : null;
+        const currentTitle = titleH2 ? titleH2.querySelector('strong.current-title') : null;
+        
+        if (titleH2 && idStrong && currentTitle && !titleH2.querySelector('#copy-full-title-btn')) {
+            // 创建复制按钮，但先不设置内容（会在点击时动态获取）
+            const btn = createCopyButton('📋 复制标题', '');
+            btn.id = 'copy-full-title-btn';
+            
+            // 在点击时动态获取当前显示的标题内容
+            btn.onclick = (e) => {
+                e.stopPropagation();
+                
+                // 动态获取当前显示的标题内容
+                const currentId = titleH2.querySelector('strong:first-child')?.textContent.trim() || '';
+                const currentTitleText = titleH2.querySelector('strong.current-title')?.textContent.trim() || '';
+                const contentToCopy = `${currentId} ${currentTitleText}`.trim();
+                
+                navigator.clipboard.writeText(contentToCopy).then(() => {
+                    const originalText = btn.textContent;
+                    btn.textContent = '✅ 已复制';
+                    setTimeout(() => btn.textContent = originalText, 1000);
+                }).catch(() => {
+                    console.error('复制失败');
+                });
+            };
+            
+            titleH2.appendChild(btn);
+        }
+        
+        // 系列、导演等结构（动态识别subtitle）
+        document.querySelectorAll('h2.title.is-4').forEach(h2 => {
+            const subtitle = h2.querySelector('span.section-subtitle');
+            const name = h2.querySelector('span.section-name');
+            if (subtitle && name && !h2.querySelector('.copy-btn')) {
+                const label = subtitle.textContent.trim();
+                const content = name.textContent.trim();
+                const btn = createCopyButton(`📋 复制${label}`, content);
+                h2.appendChild(btn);
+            }
+        });
+        
+        applyButtonTheme(); // 添加按钮后也应用主题
+    }
+      
+    function applyButtonTheme() {
+        if (!config.copyButtons) return;
+        const theme = document.documentElement.getAttribute('data-theme') || 'light';
+        document.querySelectorAll('.copy-btn').forEach(btn => {
+            btn.style.background = 'transparent';
+            btn.style.fontSize = '13px';
+            btn.style.border = '1px solid';
+            btn.style.borderRadius = '4px';
+            btn.style.padding = '2px 6px';
+            btn.style.marginLeft = '10px';
+            btn.style.cursor = 'pointer';
+            btn.style.transition = 'all 0.2s ease';
+            if (theme === 'dark') {
+                btn.style.color = '#ccc';
+                btn.style.borderColor = '#555';
+            } else {
+                btn.style.color = '#333';
+                btn.style.borderColor = '#aaa';
+            }
+            btn.onmouseenter = () => {
+                if (theme === 'dark') {
+                    btn.style.background = '#444';
+                    btn.style.color = '#fff';
+                } else {
+                    btn.style.background = '#ddd';
+                    btn.style.color = '#000';
+                }
+            };
+            btn.onmouseleave = () => {
+                btn.style.background = 'transparent';
+                if (theme === 'dark') {
+                    btn.style.color = '#ccc';
+                } else {
+                    btn.style.color = '#333';
+                }
+            };
+        });
+    }  
+  
+    function observeThemeChange() {
+        if (!config.copyButtons) return;
+        const observer = new MutationObserver(mutations => {
+            mutations.forEach(mutation => {
+                if (mutation.attributeName === 'data-theme') {
+                    applyButtonTheme();
+                }
+            });
+        });
+        observer.observe(document.documentElement, { attributes: true });
+    }  
+  
+    // 添加跳转到指定页并移动上一页/下一页功能
+    function enhancePaginationJump() {
+        if (!config.paginationJump) return;  
+  
+        const pagination = document.querySelector('nav.pagination');    
+        if (!pagination) return;    
+  
+        const paginationList = pagination.querySelector('ul.pagination-list');    
+        if (!paginationList) return;    
+  
+        // 检查是否已经添加了跳转功能和移动了按钮    
+        if (paginationList.querySelector('.pagination-jump') &&    
+            paginationList.querySelector('.moved-pagination-prev') &&    
+            paginationList.querySelector('.moved-pagination-next')) {    
+            return;    
+        }    
+  
+        // 添加跳转功能（如果不存在）    
+        let jumpLi = paginationList.querySelector('.pagination-jump');    
+        if (!jumpLi) {    
+            jumpLi = document.createElement('li');    
+            jumpLi.className = 'pagination-jump';    
+  
+            const input = document.createElement('input');    
+            input.type = 'number';    
+            input.min = '1';    
+            // 输入框内的文字已移除，保持为空白；title 保留提示    
+            input.title = '跳转到指定页码';    
+  
+            const btn = document.createElement('button');    
+            btn.textContent = '跳转';    
+            btn.onclick = (e) => {    
+                e.preventDefault();    
+                const val = parseInt(input.value);    
+                if (!isNaN(val) && val > 0) {    
+                    const url = new URL(location.href);    
+                    url.searchParams.set('page', val);    
+                    location.href = url.toString();    
+                }    
+            };    
+  
+            jumpLi.appendChild(input);    
+            jumpLi.appendChild(btn);    
+  
+            // 插入到列表末尾（在省略号或其他最后一个li之后）    
+            const lastLi = paginationList.querySelector('li:last-child');    
+            if (lastLi) {    
+                paginationList.insertBefore(jumpLi, lastLi.nextSibling);    
+            } else {    
+                paginationList.appendChild(jumpLi);    
+            }    
+        }    
+  
+        // 移动上一页按钮    
+        let prevBtn = pagination.querySelector('.pagination-previous');    
+        if (prevBtn && !paginationList.querySelector('.moved-pagination-prev')) {    
+            // 创建li容器并移动按钮    
+            const prevLi = document.createElement('li');    
+            prevLi.className = 'moved-pagination-prev';    
+            prevBtn.classList.add('pagination-link'); // 统一样式    
+            prevBtn.classList.remove('pagination-previous'); // 移除原类避免冲突    
+            prevLi.appendChild(prevBtn);    
+  
+            // 插入到跳转li之后（紧邻右侧）    
+            paginationList.insertBefore(prevLi, jumpLi.nextSibling);    
+        }    
+  
+        // 移动下一页按钮    
+        let nextBtn = pagination.querySelector('.pagination-next');    
+        if (nextBtn && !paginationList.querySelector('.moved-pagination-next')) {    
+            // 创建li容器并移动按钮    
+            const nextLi = document.createElement('li');    
+            nextLi.className = 'moved-pagination-next';    
+            nextBtn.classList.add('pagination-link'); // 统一样式    
+            nextBtn.classList.remove('pagination-next'); // 移除原类避免冲突    
+            nextLi.appendChild(nextBtn);    
+  
+            // 插入到上一页li之后（紧邻上一页右侧，确保上一页和下一页紧邻）    
+            const movedPrevLi = paginationList.querySelector('.moved-pagination-prev');    
+            if (movedPrevLi) {    
+                paginationList.insertBefore(nextLi, movedPrevLi.nextSibling);    
+            } else {    
+                // 如果没有上一页，紧邻在跳转li之后    
+                paginationList.insertBefore(nextLi, jumpLi.nextSibling);    
+            }    
+  
+            // 如果有上一页但插入位置不对，调整    
+            if (movedPrevLi && movedPrevLi.nextSibling !== nextLi) {    
+                paginationList.insertBefore(nextLi, movedPrevLi.nextSibling);    
+            }    
+        }    
+    }  
+  
+    // 翻译主函数 - 执行所有翻译任务
+    function runTranslation() {
+        if (!config.translation) return true;
+        try {
+            translationStatus.attempt++;
+            translationStatus.lastRun = Date.now();
+            if (document.body) {
+                translateTextNodes(document.body);
+                translatePlaceholders();
+                translateTitle();
+                translateButtonValues();
+                translateTooltipAttributes();
+                translateTitleAttributes();
+                translateDataConfirmAttributes(); // 确保登出确认提示被替换
+            }
+            translationStatus.success = true;
+            if (config.retryButton) {
+                updateRetryButton('success');
+                // 3秒后恢复按钮状态
+                setTimeout(() => {
+                    updateRetryButton('normal');
+                }, 3000);
+            }
+            return true;
+        } catch (error) {
+            console.error("翻译过程出错:", error);
+            translationStatus.success = false;
+            if (config.retryButton) {
+                updateRetryButton('error');
+                // 3秒后恢复按钮状态
+                setTimeout(() => {
+                    updateRetryButton('normal');
+                }, 3000);
+            }
+            return false;
+        }
+    }  
+  
+    // 自动重试机制
+    function setupAutoRetry() {
+        if (!config.translation) return;
+        // 首次翻译失败后，尝试再次翻译（最多3次）
+        const retryInterval = setInterval(() => {
+            // 如果已经成功翻译或者已经尝试了3次，则停止重试
+            if (translationStatus.success || translationStatus.attempt >= 3) {
+                clearInterval(retryInterval);
+                return;
+            }
+            // 重新运行翻译
+            console.log(`自动重试翻译 (第${translationStatus.attempt + 1}次)`);
+            runTranslation();
+        }, 2000); // 每2秒重试一次
+    }  
+  
+    // 添加手动触发翻译的按钮
+    function addRetryButton() {
+        // 翻译功能关闭时，即使重试按钮开关为true也不显示
+        if (!config.translation || !config.retryButton) {
+            const existingBtn = document.querySelector('.translate-retry-btn');
+            if (existingBtn) existingBtn.remove();
+            return;
+        }
+        if (document.querySelector('.translate-retry-btn')) return;
+        const btn = document.createElement('button');
+        btn.className = 'translate-retry-btn';
+        btn.textContent = '重新翻译';
+        btn.title = '点击重新执行简体中文翻译';
+        btn.onclick = () => {
+            btn.textContent = '翻译中...';
+            btn.disabled = true;
+            setTimeout(() => {
+                runTranslation();
+                btn.disabled = false;
+            }, 100);
+        };
+        document.body.appendChild(btn);
+    }
+  
+    // 更新重试按钮状态
+    function updateRetryButton(status) {
+        if (!config.translation || !config.retryButton) return;
+        const btn = document.querySelector('.translate-retry-btn');
+        if (!btn) return;
+        btn.classList.remove('success', 'error');
+        switch (status) {
+            case 'success':
+                btn.classList.add('success');
+                btn.textContent = '翻译成功!';
+                break;
+            case 'error':
+                btn.classList.add('error');
+                btn.textContent = '翻译失败!';
+                break;
+            default:
+                btn.textContent = '重新翻译';
+                break;
+        }
+    } 
+  
+    // 监听搜索类型下拉框的变化，确保当用户切换类型后，更新后的输入框的 placeholder 属性能被翻译成简体中文
+    function attachSearchTypeListener() {
+        if (!config.translation) return;
+        const searchTypeSelect = document.getElementById('search-type');
+        if (searchTypeSelect) {
+            searchTypeSelect.addEventListener('change', () => {
+                // 延迟确保 placeholder 已更新
+                setTimeout(translatePlaceholders, 0);
+            });
+        }
+    }  
+  
+    // 恢复原始MutationObserver，但添加安全检查以避免错误（针对隐藏VIP链接的逗号修复）
+    function setupVipLinkObserver() {
+        if (!config.hideVipLink) return;
+        new MutationObserver(() => {
+            let n = document.querySelector('a[href="/plans"]');
+            if(n) n.previousSibling?.nodeType===3&&(n.previousSibling.textContent=n.previousSibling.textContent.replace(/[,，]\s*$/, ''));
+        }).observe(document.body || document, {childList: true, subtree: true});
+    }  
+
+    // ==================== 503 自动重载 ====================
+    // 网站返回 "503 Service Temporarily Unavailable" (openresty) 错误页时，
+    // 倒计时后自动重载重试；时间窗口内限制重试次数，防止无限刷新。
+    const RELOAD_503_MAX = 5;                 // 统计窗口内最大自动重载次数
+    const RELOAD_503_WINDOW = 5 * 60 * 1000;  // 重载次数统计窗口（5分钟）
+    const RELOAD_503_DELAY = 5;               // 重载前倒计时秒数
+    const RELOAD_503_STATE_KEY = 'javdb_503_reload_state';
+
+    function get503State() {
+        try {
+            const raw = sessionStorage.getItem(RELOAD_503_STATE_KEY);
+            if (raw) return JSON.parse(raw);
+        } catch (e) { /* sessionStorage 不可用时忽略 */ }
+        return { count: 0, firstTime: 0 };
+    }
+
+    function set503State(state) {
+        try { sessionStorage.setItem(RELOAD_503_STATE_KEY, JSON.stringify(state)); } catch (e) {}
+    }
+
+    function clear503State() {
+        try { sessionStorage.removeItem(RELOAD_503_STATE_KEY); } catch (e) {}
+    }
+
+    // 判断当前页面是否为503错误页（标题/正文特征 + 正文极短，防止误判正常页面）
+    function is503ErrorPage() {
+        const title = document.title || '';
+        const titleHit = /503/.test(title) && /Service\s+Temporarily\s+Unavailable/i.test(title);
+        const body = document.body;
+        if (!body) return titleHit;
+        const text = (body.textContent || '').replace(/\s+/g, ' ').trim();
+        const bodyHit = /503\s+Service\s+Temporarily\s+Unavailable/i.test(text) &&
+                        /openresty/i.test(text) &&
+                        text.length < 200;
+        return titleHit || bodyHit;
+    }
+
+    // 503 提示浮层（倒计时 / 达到上限时附带手动重载按钮）
+    function render503Overlay(message, withReloadBtn) {
+        let box = document.getElementById('javdb-503-reload-box');
+        if (!box) {
+            box = document.createElement('div');
+            box.id = 'javdb-503-reload-box';
+            box.style.cssText = 'position:fixed;top:14px;right:14px;z-index:2147483647;background:#3273dc;color:#fff;padding:10px 16px;border-radius:8px;font-size:14px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;box-shadow:0 2px 10px rgba(0,0,0,.35);display:flex;align-items:center;gap:10px;';
+            (document.body || document.documentElement).appendChild(box);
+        }
+        box.innerHTML = '';
+        const span = document.createElement('span');
+        span.textContent = message;
+        box.appendChild(span);
+        if (withReloadBtn) {
+            const btn = document.createElement('button');
+            btn.textContent = '立即重载';
+            btn.style.cssText = 'background:#fff;color:#3273dc;border:none;border-radius:5px;padding:4px 10px;cursor:pointer;font-size:13px;';
+            btn.onclick = () => { set503State({ count: 0, firstTime: Date.now() }); location.reload(); };
+            box.appendChild(btn);
+        }
+        return box;
+    }
+
+    // 入口：检测503 + 倒计时自动重载
+    function setupAutoReloadOn503() {
+        if (!config.autoReload503) return;
+
+        const startCheck = () => {
+            // 正常页面：清零重试计数，之后若再遇到503可重新自动重试
+            if (!is503ErrorPage()) {
+                clear503State();
+                return;
+            }
+
+            const now = Date.now();
+            const state = get503State();
+            if (!state.firstTime || now - state.firstTime > RELOAD_503_WINDOW) {
+                state.count = 0;
+                state.firstTime = now;
+            }
+
+            // 达到上限：不再自动刷新，只提供手动按钮
+            if (state.count >= RELOAD_503_MAX) {
+                render503Overlay(`⚠️ 503 重试已达上限(${RELOAD_503_MAX}次)，请稍后再试`, true);
+                return;
+            }
+
+            state.count += 1;
+            set503State(state);
+
+            let left = RELOAD_503_DELAY;
+            render503Overlay(`⚠️ 503 服务不可用，${left}s 后自动重载（第 ${state.count}/${RELOAD_503_MAX} 次）`);
+            const timer = setInterval(() => {
+                left -= 1;
+                if (left <= 0) {
+                    clearInterval(timer);
+                    location.reload();
+                } else {
+                    render503Overlay(`⚠️ 503 服务不可用，${left}s 后自动重载（第 ${state.count}/${RELOAD_503_MAX} 次）`);
+                }
+            }, 1000);
+        };
+
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', () => setTimeout(startCheck, 300));
+        } else {
+            setTimeout(startCheck, 300);
+        }
+    }
+
+    // ==================== 已下载标记功能 ====================
+    const WATCHED_KEY = 'javdb_watched_codes';
+    let watchedList = []; // 现为对象数组: [{code, url, series, markTime}]
+    let watchedSet = new Set();
+    let watchedUI = null;
+
+    function loadWatched() {
+        try {
+            const raw = GM_getValue(WATCHED_KEY, null);
+            const parsed = raw ? JSON.parse(raw) : [];
+            if (!Array.isArray(parsed)) parsed = [];
+            // 兼容旧版纯字符串数组数据
+            watchedList = parsed.map(item => {
+                if (typeof item === 'string') {
+                    return { code: item.toUpperCase(), url: '', series: '', markTime: Date.now() };
+                }
+                return {
+                    code: String(item.code || '').toUpperCase(),
+                    url: item.url || '',
+                    series: item.series || '',
+                    markTime: item.markTime || Date.now()
+                };
+            });
+        } catch (e) { watchedList = []; }
+        watchedSet = new Set(watchedList.map(item => item.code));
+    }
+
+    function saveWatched() {
+        GM_setValue(WATCHED_KEY, JSON.stringify(watchedList));
+        watchedSet = new Set(watchedList.map(item => item.code));
+        publishWatchedSync(); // 通知其他标签页同步最新数据，防止互相覆盖
+        updateWatchedTriggerCount();
+        refreshAllMarkBtns();
+    }
+
+    // ---------- 跨标签页数据同步（防止多标签页互相覆盖） ----------
+    const WATCHED_SYNC_KEY = 'javdb_watched_sync_bus';
+
+    // 保存后向其他标签页广播最新数据
+    function publishWatchedSync() {
+        try {
+            localStorage.setItem(WATCHED_SYNC_KEY, JSON.stringify({ ts: Date.now(), list: watchedList }));
+        } catch (e) { /* localStorage 不可用时忽略 */ }
+    }
+
+    // 收到其他标签页的数据后，更新内存与界面（注意：只更新，不再次保存，避免死循环）
+    function applyRemoteWatchedList(list) {
+        if (!Array.isArray(list)) return;
+        watchedList = list;
+        watchedSet = new Set(watchedList.map(item => item.code));
+        refreshAllMarkBtns();
+        updateWatchedTriggerCount();
+        if (watchedUI && watchedUI.panel.classList.contains('active')) renderWatchedList();
+    }
+
+    function setupWatchedSync() {
+        // 通道1：GM 值变化监听（跨标签页，甚至跨不同 javdb 域名）
+        if (typeof GM_addValueChangeListener === 'function') {
+            GM_addValueChangeListener(WATCHED_KEY, (name, oldVal, newVal, remote) => {
+                if (!remote || !newVal) return; // 只处理来自其他标签页的变化
+                try { applyRemoteWatchedList(JSON.parse(newVal)); } catch (e) {}
+            });
+        }
+        // 通道2：localStorage storage 事件（同域名跨标签页兜底同步）
+        window.addEventListener('storage', (e) => {
+            if (e.key !== WATCHED_SYNC_KEY || !e.newValue) return;
+            try {
+                const payload = JSON.parse(e.newValue);
+                if (payload && Array.isArray(payload.list)) applyRemoteWatchedList(payload.list);
+            } catch (err) {}
+        });
+    }
+
+    function addWatched(code, url = '', series = '') {
+        code = String(code || '').trim().toUpperCase();
+        if (!code || watchedSet.has(code)) return false;
+        watchedList.unshift({ code, url, series, markTime: Date.now() });
+        saveWatched();
+        return true;
+    }
+
+    function removeWatched(code) {
+        code = String(code || '').trim().toUpperCase();
+        const idx = watchedList.findIndex(item => item.code === code);
+        if (idx === -1) return false;
+        watchedList.splice(idx, 1);
+        saveWatched();
+        return true;
+    }
+
+    function updateWatched(oldCode, newData) {
+        oldCode = String(oldCode || '').trim().toUpperCase();
+        const idx = watchedList.findIndex(item => item.code === oldCode);
+        if (idx === -1) return false;
+        const newCode = String(newData.code || '').trim().toUpperCase();
+        if (newCode !== oldCode && watchedSet.has(newCode)) {
+            watchedList.splice(idx, 1);
+        } else {
+            watchedList[idx] = { ...watchedList[idx], ...newData, code: newCode };
+        }
+        saveWatched();
+        return true;
+    }
+
+    // 判断搜索词是否为番号（如 RCTD-625 / rctd625 / RCTD 625）
+    function isCodeLikeQuery(q) {
+        return /^[A-Za-z]{2,10}[-_\s]?\d{1,6}$/.test(String(q || '').trim());
+    }
+
+    // 详情页提取番号（优先番号复制按钮的 data-clipboard-text，最干净）
+    function extractDetailCode() {
+        const copyBtn = document.querySelector('a.copy-to-clipboard[data-clipboard-text]');
+        if (copyBtn && copyBtn.getAttribute('data-clipboard-text')) {
+            return copyBtn.getAttribute('data-clipboard-text').trim();
+        }
+        const h2 = document.querySelector('h2.title.is-4');
+        if (h2) {
+            const strong = h2.querySelector('strong:first-child');
+            if (strong && strong.textContent.trim()) return strong.textContent.trim();
+        }
+        const m = (document.title || '').match(/[A-Za-z][A-Za-z0-9]*[-_]\d+/);
+        return m ? m[0] : '';
+    }
+
+    // 详情页提取信息面板的"系列"栏；没有该栏则视为单作品
+    function extractDetailSeries() {
+        const blocks = document.querySelectorAll('.video-meta-panel .panel-block');
+        for (const block of blocks) {
+            const strong = block.querySelector('strong');
+            if (strong && strong.textContent.replace(/[\s:：]/g, '') === '系列') {
+                const valueEl = block.querySelector('.value');
+                const name = valueEl ? valueEl.textContent.trim() : '';
+                if (name) return `系列: ${name}`;
+            }
+        }
+        return '单作品';
+    }
+
+    // 提取当前页面的归属信息（系列/演员/片商/导演/搜索词/单作品）
+    function extractCurrentSeries() {
+        // 1. 详情页：读取信息面板"系列"栏，无则视为单作品
+        if (document.querySelector('.video-detail')) {
+            return extractDetailSeries();
+        }
+
+        // 2. 列表页明确分类（系列/演员/片商/导演）
+        const subTitle = document.querySelector('.section-subtitle');
+        const sectionName = document.querySelector('.section-name');
+        if (subTitle && sectionName) {
+            const label = subTitle.textContent.trim();
+            if (['系列', '演员', '片商', '导演'].includes(label)) {
+                return `${label}: ${sectionName.textContent.trim()}`;
+            }
+        }
+
+        // 3. 搜索页：取关键字（优先搜索框，回退 URL ?q=）
+        let q = '';
+        const searchInput = document.getElementById('video-search');
+        if (searchInput && searchInput.value.trim()) {
+            q = searchInput.value.trim();
+        } else if (window.location.pathname.includes('/search')) {
+            q = (new URLSearchParams(window.location.search).get('q') || '').trim();
+        }
+        if (q) {
+            // 直接搜索番号视为单作品
+            if (isCodeLikeQuery(q)) return '单作品';
+            return `系列: ${q}`;
+        }
+
+        return '';
+    }
+
+    function extractItemCode(item) {
+        const strong = item.querySelector('.video-title strong');
+        if (strong && strong.textContent.trim()) return strong.textContent.trim();
+        const vt = item.querySelector('.video-title');
+        if (vt) {
+            const m = vt.textContent.match(/[A-Za-z][A-Za-z0-9]*-\d+/);
+            if (m) return m[0];
+        }
+        return '';
+    }
+
+    function refreshMarkBtn(btn, code) {
+        const marked = watchedSet.has(code.toUpperCase());
+        btn.classList.toggle('marked', marked);
+        btn.textContent = '✓';
+        btn.title = marked ? `已下载：${code}（点击取消标记）` : `标记 ${code} 为已下载`;
+    }
+
+    function refreshAllMarkBtns() {
+        document.querySelectorAll('.dl-mark-btn[data-code]').forEach(btn => {
+            refreshMarkBtn(btn, btn.getAttribute('data-code'));
+        });
+    }
+
+    function applyDownloadMarks() {
+        if (!config.downloadMark) return;
+        const currentSeries = extractCurrentSeries();
+        
+        document.querySelectorAll('.movie-list .item').forEach(item => {
+            if (item.querySelector('.dl-mark-btn')) return;
+            const code = extractItemCode(item);
+            if (!code) return;
+            const cover = item.querySelector('.cover') || item.querySelector('a.box');
+            if (!cover) return;
+            
+            const linkEl = item.querySelector('a.box');
+            const url = linkEl ? linkEl.href : '';
+            
+            const btn = document.createElement('button');
+            btn.className = 'dl-mark-btn';
+            btn.type = 'button';
+            btn.setAttribute('data-code', code);
+            refreshMarkBtn(btn, code);
+            btn.onclick = (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                if (watchedSet.has(code.toUpperCase())) {
+                    removeWatched(code);
+                } else {
+                    addWatched(code, url, currentSeries);
+                }
+                if (watchedUI && watchedUI.panel.classList.contains('active')) renderWatchedList();
+            };
+            cover.appendChild(btn);
+        });
+    }
+    
+    // 详情页封面右上角添加标记按钮，支持详情页直接标记
+    function applyDetailPageMark() {
+        if (!config.downloadMark) return;
+        if (document.querySelector('.dl-mark-btn-detail')) return;
+        const detail = document.querySelector('.video-detail');
+        if (!detail) return;
+
+        const code = extractDetailCode();
+        if (!code) return;
+
+        const btn = document.createElement('button');
+        btn.className = 'dl-mark-btn dl-mark-btn-detail';
+        btn.type = 'button';
+        btn.setAttribute('data-code', code);
+        refreshMarkBtn(btn, code);
+        btn.onclick = (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (watchedSet.has(code.toUpperCase())) {
+                removeWatched(code);
+            } else {
+                addWatched(code, location.href, extractCurrentSeries());
+            }
+            if (watchedUI && watchedUI.panel.classList.contains('active')) renderWatchedList();
+        };
+
+        // 优先挂在封面右上角；无封面时内联挂在番号行
+        const coverCol = detail.querySelector('.column-video-cover');
+        if (coverCol) {
+            coverCol.style.position = 'relative';
+            coverCol.appendChild(btn);
+        } else {
+            const codeBlock = detail.querySelector('.panel-block.first-block') || detail.querySelector('.panel-block');
+            if (!codeBlock) return;
+            btn.style.position = 'static';
+            btn.style.marginLeft = '8px';
+            btn.style.verticalAlign = 'middle';
+            codeBlock.appendChild(btn);
+        }
+    }
+
+    function createWatchedUI() {
+        if (!config.downloadMark || watchedUI) return;
+
+        const overlay = document.createElement('div');
+        overlay.className = 'javdb-settings-overlay';
+
+        const panel = document.createElement('div');
+        panel.className = 'javdb-settings-panel javdb-watched-panel';
+        panel.innerHTML = `
+            <div class="javdb-settings-header">
+                <h2>📥 已下载列表（<span class="watched-count">0</span>）</h2>
+                <button class="javdb-settings-close">×</button>
+            </div>
+            <div class="javdb-settings-body">
+                <div class="watched-add-row">
+                    <input type="text" class="watched-add-input" placeholder="输入番号添加，如 BBAN-439（多个用空格/逗号分隔）">
+                    <button class="javdb-btn javdb-btn-primary watched-add-btn">添加</button>
+                </div>
+                <div class="watched-filter-row">
+                    <input type="text" class="watched-filter-input" placeholder="过滤列表...">
+                    <button class="javdb-btn watched-copyall-btn">复制全部</button>
+                    <button class="javdb-btn watched-clear-btn">清空</button>
+                </div>
+                <ul class="watched-list"></ul>
+            </div>
+            <div class="javdb-settings-footer">
+                <button class="javdb-btn javdb-btn-primary watched-close-btn">关闭</button>
+            </div>
+        `;
+
+        const trigger = document.createElement('button');
+        trigger.className = 'javdb-watched-trigger';
+
+        document.body.appendChild(overlay);
+        document.body.appendChild(panel);
+        document.body.appendChild(trigger);
+
+        watchedUI = {
+            overlay, panel, trigger,
+            countEl: panel.querySelector('.watched-count'),
+            listEl: panel.querySelector('.watched-list'),
+            addInput: panel.querySelector('.watched-add-input'),
+            filterInput: panel.querySelector('.watched-filter-input')
+        };
+
+        const open = () => { renderWatchedList(); panel.classList.add('active'); overlay.classList.add('active'); };
+        const close = () => { panel.classList.remove('active'); overlay.classList.remove('active'); };
+
+        trigger.onclick = open;
+        overlay.onclick = close;
+        panel.querySelector('.javdb-settings-close').onclick = close;
+        panel.querySelector('.watched-close-btn').onclick = close;
+
+        const doAdd = () => {
+            const v = watchedUI.addInput.value.trim();
+            if (!v) return;
+            v.split(/[\s,，、]+/).forEach(c => addWatched(c));
+            watchedUI.addInput.value = '';
+            renderWatchedList();
+        };
+        panel.querySelector('.watched-add-btn').onclick = doAdd;
+        watchedUI.addInput.addEventListener('keydown', e => { if (e.key === 'Enter') doAdd(); });
+        watchedUI.filterInput.addEventListener('input', renderWatchedList);
+
+        panel.querySelector('.watched-copyall-btn').onclick = function () {
+            if (!watchedList.length) return;
+            navigator.clipboard.writeText(watchedList.map(i => i.code).join('\n')).then(() => {
+                const t = this.textContent; this.textContent = '✅ 已复制';
+                setTimeout(() => this.textContent = t, 1000);
+            }).catch(() => console.error('复制失败'));
+        };
+
+        panel.querySelector('.watched-clear-btn').onclick = () => {
+            if (!watchedList.length) return;
+            if (confirm(`确定要清空全部 ${watchedList.length} 条已下载记录吗？`)) {
+                watchedList = [];
+                saveWatched();
+                renderWatchedList();
+            }
+        };
+
+        updateWatchedTriggerCount();
+    }
+
+    function updateWatchedTriggerCount() {
+        if (watchedUI) watchedUI.trigger.textContent = `📥 已下载 (${watchedList.length})`;
+    }
+
+    function renderWatchedList() {
+        if (!watchedUI) return;
+        const { listEl, filterInput, countEl } = watchedUI;
+        const filter = (filterInput.value || '').trim().toUpperCase();
+        listEl.innerHTML = '';
+        const shown = watchedList.filter(item => !filter || item.code.includes(filter));
+        if (shown.length === 0) {
+            const li = document.createElement('li');
+            li.className = 'watched-empty';
+            li.textContent = watchedList.length === 0
+                ? '暂无记录：可在列表页封面点击 ✓ 标记，或在上方手动添加'
+                : '没有匹配的记录';
+            listEl.appendChild(li);
+        } else {
+            shown.forEach(item => listEl.appendChild(buildWatchedRow(item)));
+        }
+        countEl.textContent = watchedList.length;
+        updateWatchedTriggerCount();
+    }
+
+    // 列表中的单行：查看 / 编辑(番号/系列/链接) / 删除
+    function buildWatchedRow(item) {
+        const li = document.createElement('li');
+        li.className = 'watched-item';
+
+        const topRow = document.createElement('div');
+        topRow.style.cssText = 'display: flex; justify-content: space-between; width: 100%; align-items: center;';
+
+        const codeSpan = document.createElement('span');
+        codeSpan.className = 'watched-code';
+        codeSpan.textContent = item.code;
+        
+        const actions = document.createElement('span');
+        actions.className = 'watched-actions';
+
+        const editBtn = document.createElement('button');
+        editBtn.className = 'javdb-btn';
+        editBtn.textContent = '编辑';
+        
+        const delBtn = document.createElement('button');
+        delBtn.className = 'javdb-btn';
+        delBtn.textContent = '删除';
+        delBtn.onclick = (e) => { e.stopPropagation(); removeWatched(item.code); renderWatchedList(); };
+
+        actions.appendChild(editBtn);
+        actions.appendChild(delBtn);
+        
+        topRow.appendChild(codeSpan);
+        topRow.appendChild(actions);
+        li.appendChild(topRow);
+
+        const infoRow = document.createElement('div');
+        infoRow.className = 'watched-info-row';
+        
+        if (item.series) {
+            const seriesSpan = document.createElement('span');
+            const hasPrefix = /^(系列|演员|片商|导演):/.test(item.series) || item.series === '单作品';
+            seriesSpan.textContent = hasPrefix ? item.series : `系列: ${item.series}`;
+            infoRow.appendChild(seriesSpan);
+        }
+        if (item.url) {
+            const linkSpan = document.createElement('a');
+            try {
+                // 【修改点】：动态将保存的链接域名替换为当前访问的域名，底层数据 item.url 保持不变
+                const urlObj = new URL(item.url);
+                urlObj.host = location.host; 
+                linkSpan.href = urlObj.toString();
+            } catch (e) {
+                linkSpan.href = item.url; // 解析失败则保留原链接
+            }
+            linkSpan.target = '_blank';
+            linkSpan.textContent = '🔗 查看原页';
+            linkSpan.onclick = (e) => e.stopPropagation();
+            infoRow.appendChild(linkSpan);
+        }
+        if (item.markTime) {
+            const timeSpan = document.createElement('span');
+            timeSpan.textContent = `标记于: ${new Date(item.markTime).toLocaleDateString()}`;
+            infoRow.appendChild(timeSpan);
+        }
+        li.appendChild(infoRow);
+
+        editBtn.onclick = (e) => {
+            e.stopPropagation();
+            li.innerHTML = '';
+            li.style.gap = '8px';
+            
+            const inputCode = document.createElement('input');
+            inputCode.className = 'watched-edit-input';
+            inputCode.value = item.code;
+            inputCode.placeholder = '番号';
+            
+            const inputSeries = document.createElement('input');
+            inputSeries.className = 'watched-edit-input';
+            inputSeries.value = item.series;
+            inputSeries.placeholder = '归属系列';
+            
+            const inputUrl = document.createElement('input');
+            inputUrl.className = 'watched-edit-input';
+            inputUrl.value = item.url;
+            inputUrl.placeholder = '链接';
+            
+            const btnRow = document.createElement('div');
+            btnRow.className = 'watched-actions';
+            
+            const saveBtn = document.createElement('button');
+            saveBtn.className = 'javdb-btn javdb-btn-primary';
+            saveBtn.textContent = '保存';
+            
+            const cancelBtn = document.createElement('button');
+            cancelBtn.className = 'javdb-btn';
+            cancelBtn.textContent = '取消';
+            
+            saveBtn.onclick = (ev) => {
+                ev.stopPropagation();
+                updateWatched(item.code, { code: inputCode.value, series: inputSeries.value, url: inputUrl.value });
+                renderWatchedList();
+            };
+            cancelBtn.onclick = (ev) => { ev.stopPropagation(); renderWatchedList(); };
+            
+            btnRow.appendChild(saveBtn);
+            btnRow.appendChild(cancelBtn);
+            
+            li.appendChild(inputCode);
+            li.appendChild(inputSeries);
+            li.appendChild(inputUrl);
+            li.appendChild(btnRow);
+            inputCode.focus();
+        };
+
+        return li;
+    }
+
+    // ==================== 数据备份与 WebDAV 核心逻辑 (完整合并版) ====================
+    const WEBDAV_CONFIG_KEY = 'javdb_webdav_config';
+
+    function loadWebDavConfig() {
+        try { return JSON.parse(GM_getValue(WEBDAV_CONFIG_KEY, '{}')); } catch { return {}; }
+    }
+    function saveWebDavConfig(cfg) {
+        GM_setValue(WEBDAV_CONFIG_KEY, JSON.stringify(cfg));
+    }
+
+    // 生成带日期时间的备份文件名 (格式: JavDB_Enhancer_Backup_2026-08-19_14-30-25.json)
+    function getBackupFileName() {
+        const now = new Date();
+        const pad = (n) => String(n).padStart(2, '0');
+        const dateStr = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+        const timeStr = `${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`;
+        return `JavDB_Enhancer_Backup_${dateStr}_${timeStr}.json`;
+    }
+
+    // 1. 获取备份数据
+    function getBackupData() {
+        return {
+            version: GM_info.script.version,
+            timestamp: Date.now(),
+            config: config,
+            watched: watchedList
+        };
+    }
+
+    // 2. 应用备份数据
+    function applyBackupData(data) {
+        if (data.config) { config = Object.assign({}, DEFAULT_CONFIG, data.config); saveConfig(); }
+        if (data.watched) { watchedList = data.watched; saveWatched(); }
+    }
+
+    // 3. 本地导出备份 (带日期时间 + 格式化 JSON 解决内容紊乱)
+    function exportBackup() {
+        const blob = new Blob([JSON.stringify(getBackupData(), null, 2)], { type: 'application/json;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = getBackupFileName();
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    }
+
+    // 4. 本地导入备份
+    function importBackup(file) {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            try {
+                const data = JSON.parse(e.target.result);
+                applyBackupData(data);
+                alert('导入成功！页面将刷新以应用新数据。');
+                location.reload();
+            } catch (err) {
+                alert('导入失败：文件格式错误');
+            }
+        };
+        reader.readAsText(file);
+    }
+
+    // 5. 安全的 Base64 认证头
+    function getAuthHeader(user, pass) {
+        return 'Basic ' + btoa(unescape(encodeURIComponent(user + ':' + pass)));
+    }
+
+    // 6. 核心底层请求 (局域网兼容：强制处理空 Body，专治局域网设备对 null body 的敏感)
+    function webdavRequest(method, url, headers = {}, data = null) {
+        return new Promise((resolve, reject) => {
+            // 对于 MKCOL，强制转为空字符串 ''，让浏览器发送标准的 Content-Length: 0
+            if (data === null && method === 'MKCOL') {
+                data = '';
+            }
+
+            GM_xmlhttpRequest({
+                method: method,
+                url: url,
+                headers: headers,
+                data: data,
+                onload: (res) => {
+                    if (res.status >= 200 && res.status < 300) {
+                        resolve(res);
+                    } else {
+                        reject(new Error(`HTTP_${res.status}_${res.statusText || 'Unknown'}`));
+                    }
+                },
+                onerror: (err) => {
+                    console.error('[WebDAV] 网络层拦截:', err);
+                    reject(new Error(`Network_Error_${err.statusText || 'Failed'}`));
+                },
+                ontimeout: () => reject(new Error('Timeout'))
+            });
+        });
+    }
+
+    // 7. 确保 WebDAV 目录存在 (多重试错机制，专治各种局域网奇葩 WebDAV)
+    async function ensureWebDavDir(baseUrl, dirPath, user, pass) {
+        if (!dirPath) return;
+        
+        const parts = dirPath.split('/').filter(Boolean);
+        let currentPath = baseUrl.replace(/\/+$/, ''); 
+        
+        for (const part of parts) {
+            currentPath += '/' + encodeURIComponent(part);
+            let created = false;
+            let lastError = '';
+
+            // 准备 3 套局域网兼容策略依次尝试
+            const strategies = [
+                { url: currentPath, headers: { 'Authorization': getAuthHeader(user, pass), 'Content-Type': 'application/xml' }, data: '' },
+                { url: currentPath + '/', headers: { 'Authorization': getAuthHeader(user, pass), 'Content-Type': 'text/plain' }, data: '' },
+                { url: currentPath, headers: { 'Authorization': getAuthHeader(user, pass) }, data: '' }
+            ];
+
+            for (const strategy of strategies) {
+                try {
+                    await webdavRequest('MKCOL', strategy.url, strategy.headers, strategy.data);
+                    created = true;
+                    break;
+                } catch (e) {
+                    lastError = e.message;
+                    if (e.message.includes('405') || e.message.includes('301')) {
+                        created = true; // 405 表示目录已存在
+                        break;
+                    }
+                    if (e.message.includes('409')) {
+                        throw new Error(`创建目录 "${part}" 失败 (409): 父目录不存在。请检查 WebDAV 基础路径是否正确。`);
+                    }
+                }
+            }
+
+            if (!created) {
+                throw new Error(`创建目录 "${part}" 失败，已尝试所有局域网兼容策略。最后错误: ${lastError}`);
+            }
+        }
+    }
+
+    // 8. 上传到 WebDAV (使用终极二进制流绕过 415，并格式化 JSON 解决内容紊乱)
+    async function uploadToWebDav(baseUrl, dirPath, fileName, data, user, pass) {
+        await ensureWebDavDir(baseUrl, dirPath, user, pass);
+        
+        let fileUrl = baseUrl.replace(/\/+$/, '');
+        if (dirPath) {
+            const parts = dirPath.split('/').filter(Boolean);
+            for (const p of parts) {
+                fileUrl += '/' + encodeURIComponent(p);
+            }
+        }
+        fileUrl += '/' + encodeURIComponent(fileName);
+        
+        // 格式化 JSON (null, 2)，使文件内容缩进可读，解决不规则紊乱
+        const payload = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
+        
+        await webdavRequest('PUT', fileUrl, {
+            'Authorization': getAuthHeader(user, pass),
+            'Content-Type': 'application/octet-stream' 
+        }, payload);
+    }
+
+    // 9. 从 WebDAV 下载 (同样使用 encodeURIComponent 确保中文路径下载正常)
+    async function downloadFromWebDav(baseUrl, dirPath, fileName, user, pass) {
+        let fileUrl = baseUrl.replace(/\/+$/, '');
+        if (dirPath) {
+            const parts = dirPath.split('/').filter(Boolean);
+            for (const p of parts) {
+                fileUrl += '/' + encodeURIComponent(p);
+            }
+        }
+        fileUrl += '/' + encodeURIComponent(fileName);
+
+        const res = await webdavRequest('GET', fileUrl, {
+            'Authorization': getAuthHeader(user, pass)
+        });
+        return res.responseText;
+    }
+
+    // 10. 获取 WebDAV 目录下的文件列表 (命名空间无关解析，兼容 D:/lp1:/无前缀 等所有写法)
+    async function listWebDavFiles(baseUrl, dirPath, user, pass) {
+        let targetUrl = baseUrl.replace(/\/+$/, '');
+        if (dirPath) {
+            const parts = dirPath.split('/').filter(Boolean);
+            for (const p of parts) targetUrl += '/' + encodeURIComponent(p);
+        }
+        if (!targetUrl.endsWith('/')) targetUrl += '/';
+
+        const xmlBody = `<?xml version="1.0" encoding="utf-8" ?>
+            <D:propfind xmlns:D="DAV:">
+                <D:prop><D:getlastmodified/><D:getcontentlength/><D:resourcetype/></D:prop>
+            </D:propfind>`;
+
+        const res = await webdavRequest('PROPFIND', targetUrl, {
+            'Authorization': getAuthHeader(user, pass),
+            'Depth': '1',
+            'Content-Type': 'application/xml; charset=utf-8'
+        }, xmlBody);
+
+        console.log('[WebDAV] PROPFIND 原始响应:', res.responseText);
+
+        const parser = new DOMParser();
+        const xmlDoc = parser.parseFromString(res.responseText, "text/xml");
+
+        // 【关键修复】：按 localName 查找元素，兼容任意命名空间前缀
+        const getEls = (root, name) => {
+            try {
+                const ns = root.getElementsByTagNameNS('*', name);
+                if (ns && ns.length) return ns;
+            } catch (e) {}
+            // 兜底：手动遍历匹配 tagName / localName
+            const all = root.getElementsByTagName('*');
+            const out = [];
+            for (let i = 0; i < all.length; i++) {
+                const el = all[i];
+                if (el.localName === name || el.tagName === name || el.tagName.split(':').pop() === name) {
+                    out.push(el);
+                }
+            }
+            return out;
+        };
+
+        const responses = getEls(xmlDoc, 'response');
+        console.log('[WebDAV] 解析到 response 节点数:', responses.length);
+
+        const files = [];
+
+        for (let i = 0; i < responses.length; i++) {
+            const resp = responses[i];
+            const hrefEl = getEls(resp, 'href')[0];
+            if (!hrefEl) continue;
+
+            let href = (hrefEl.textContent || '').trim();
+            try { href = decodeURIComponent(href); } catch (e) {}
+
+            // 目录本身的条目以 / 结尾，跳过
+            if (!href || href.endsWith('/')) continue;
+
+            const fileName = href.split('/').filter(Boolean).pop();
+            if (!fileName) continue;
+
+            // 是目录(collection)则跳过
+            if (getEls(resp, 'collection')[0]) continue;
+
+            const timeEl = getEls(resp, 'getlastmodified')[0];
+            const sizeEl = getEls(resp, 'getcontentlength')[0];
+
+            files.push({
+                name: fileName,
+                time: timeEl ? new Date(timeEl.textContent).getTime() : 0,
+                timeStr: timeEl ? new Date(timeEl.textContent).toLocaleString() : '未知',
+                size: sizeEl ? parseInt(sizeEl.textContent) : 0
+            });
+        }
+
+        files.sort((a, b) => b.time - a.time);
+        return files;
+    }
+
+    // 11. 删除 WebDAV 上的指定文件
+    async function deleteWebDavFile(baseUrl, dirPath, fileName, user, pass) {
+        let fileUrl = baseUrl.replace(/\/+$/, '');
+        if (dirPath) {
+            const parts = dirPath.split('/').filter(Boolean);
+            for (const p of parts) fileUrl += '/' + encodeURIComponent(p);
+        }
+        fileUrl += '/' + encodeURIComponent(fileName);
+
+        await webdavRequest('DELETE', fileUrl, { 'Authorization': getAuthHeader(user, pass) });
+    }
+
+    // ==================== 内置谷歌翻译增强 ====================
+    const MS_TRANSLATE_SELECTORS = [
+        'h2.title.is-4',
+        '.movie-list .box',
+        '.tile-item', // 支持“TA（们）还出演过”等 tile 小图列表
+        'a.article-item' // 资讯文章卡片
+    ].join(', ');
+
+    const MS_CACHE_KEY = 'javdb_google_translate_cache';
+    const MS_CACHE_VERSION = 'v18_polish_engine'; // 升级版本，清空旧缓存
+    const MS_RATE_LIMIT = 300;
+
+    // ---------- 缓存管理 ----------
+    function getMsCache() {
+        try {
+            const raw = localStorage.getItem(MS_CACHE_KEY);
+            if (!raw) return {};
+            const parsed = JSON.parse(raw);
+            if (parsed.__version !== MS_CACHE_VERSION) {
+                localStorage.removeItem(MS_CACHE_KEY);
+                return { __version: MS_CACHE_VERSION };
+            }
+            return parsed;
+        } catch(e) { return {}; }
+    }
+
+    function setMsCache(cache) {
+        try {
+            cache.__version = MS_CACHE_VERSION;
+            const keys = Object.keys(cache).filter(k => k !== '__version');
+            if (keys.length > 2000) keys.slice(0, 500).forEach(k => delete cache[k]);
+            localStorage.setItem(MS_CACHE_KEY, JSON.stringify(cache));
+        } catch(e) {}
+    }
+
+    // ==================== 跨标签页风控弹窗单例协调器 ====================
+    // 原理：GM 存储跨标签页共享。拥有弹窗的标签页每秒写一次“心跳”维持旗帜新鲜；
+    //       其他标签页看到旗帜存在就静默等待；旗帜被清除（验证完成）时全员错峰重试。
+    const CAPTCHA_FLAG_KEY = 'javdb_captcha_flag';
+    const CAPTCHA_FLAG_TTL = 10 * 1000; // 心跳间隔1秒，10秒无心跳视为拥有者已死
+    const TAB_ID = Math.random().toString(36).slice(2) + Date.now().toString(36);
+
+    function readCaptchaFlag() {
+        try {
+            const f = GM_getValue(CAPTCHA_FLAG_KEY, null);
+            if (!f || !f.ts) return null;
+            if (Date.now() - f.ts > CAPTCHA_FLAG_TTL) return null; // 拥有者崩溃，旗帜过期
+            return f;
+        } catch (e) { return null; }
+    }
+
+    function writeCaptchaFlag() {
+        try { GM_setValue(CAPTCHA_FLAG_KEY, { ts: Date.now(), tabId: TAB_ID }); } catch (e) {}
+    }
+
+    function clearCaptchaFlag() {
+        try { GM_setValue(CAPTCHA_FLAG_KEY, null); } catch (e) {}
+    }
+
+    // 跨标签页通知：任意标签页的验证窗口关闭（旗帜被清除）后，本标签页错峰重试翻译
+    if (typeof GM_addValueChangeListener === 'function') {
+        GM_addValueChangeListener(CAPTCHA_FLAG_KEY, (name, oldVal, newVal, remote) => {
+            if (!remote) return;               // 只处理其他标签页的变化
+            if (!newVal && oldVal) {           // 旗帜从“有”变“无” = 验证完成
+                setTimeout(() => {
+                    if (typeof runMsTranslation === 'function') runMsTranslation();
+                }, 800 + Math.random() * 2200); // 随机错峰，避免多标签页同时爆发请求
+            }
+        });
+    }
+
+    // ---------- 批量翻译（Google 终极版：并发限流 + 风控单例弹窗 + 缓存防污染） ----------
+    async function msTranslateBatch(texts) {
+        if (!texts.length) return [];
+
+        const cache = getMsCache();
+        const results = new Array(texts.length).fill(null);
+        const uncachedTexts = [];
+        const uncachedIndices = [];
+
+        texts.forEach((text, i) => {
+            if (cache[text]) {
+                results[i] = cache[text];
+            } else {
+                uncachedTexts.push(text);
+                uncachedIndices.push(i);
+            }
+        });
+
+        if (uncachedTexts.length === 0) return results;
+
+        // 纯数字分隔符，防止 AI 篡改；即使被破坏也有逐条降级兜底
+        const SPLITTER = "\n9527\n";
+        const CHUNK_SIZE = 20;
+        const chunks = [];
+        for (let i = 0; i < uncachedTexts.length; i += CHUNK_SIZE) {
+            chunks.push({ startIndex: i, items: uncachedTexts.slice(i, i + CHUNK_SIZE) });
+        }
+
+        // 单条请求（深度伪装 + 风控检测 + 单例弹窗）
+        const translateOne = (text) => new Promise((resolve) => {
+            GM_xmlhttpRequest({
+                method: 'POST',
+                url: 'https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=zh-CN&dt=t',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+                    'Accept': '*/*',
+                    'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+                    'Referer': 'https://translate.google.com/',
+                    'Origin': 'https://translate.google.com'
+                },
+                data: 'q=' + encodeURIComponent(text),
+                timeout: 15000,
+                onload: res => {
+                    // 🚨 风控检测：状态码 / 重定向 URL / 人机验证页特征
+                    const finalUrl = res.finalUrl || res.responseURL || '';
+                    const isBlocked = res.status === 429 || res.status === 503 ||
+                                      finalUrl.includes('/sorry/') ||
+                                      (res.responseText && (res.responseText.includes('captcha') || res.responseText.includes('unusual traffic')));
+
+                    if (isBlocked) {
+                        const flag = readCaptchaFlag();
+                        const iAmOwner = flag && flag.tabId === TAB_ID &&
+                                         window.__javdb_captcha_window && !window.__javdb_captcha_window.closed;
+
+                        if (iAmOwner) {
+                            // 本标签页就是弹窗拥有者：只置顶，不重复弹
+                            try { window.__javdb_captcha_window.focus(); } catch (e) {}
+                        } else if (!flag) {
+                            // 全局尚无验证窗口：本标签页成为唯一拥有者，开弹窗
+                            writeCaptchaFlag();
+                            // 双重检查，降低多标签页同毫秒竞态概率
+                            if (!readCaptchaFlag() || readCaptchaFlag().tabId === TAB_ID) {
+                                console.warn('[JavDB] 🚨 触发 Google 翻译风控！打开全局唯一验证窗口...');
+                                const captchaUrl = finalUrl.includes('/sorry/') ? finalUrl : 'https://www.google.com/sorry/index';
+                                window.__javdb_captcha_window = window.open(captchaUrl, '_blank', 'width=500,height=650,scrollbars=yes');
+                                const checkClosed = setInterval(() => {
+                                    if (!window.__javdb_captcha_window || window.__javdb_captcha_window.closed) {
+                                        clearInterval(checkClosed);
+                                        window.__javdb_captcha_window = null;
+                                        clearCaptchaFlag(); // 广播所有标签页：验证结束，可重试
+                                        setTimeout(() => { if (typeof runMsTranslation === 'function') runMsTranslation(); }, 1000);
+                                    } else {
+                                        writeCaptchaFlag(); // 心跳：维持旗帜新鲜
+                                    }
+                                }, 1000);
+                            }
+                        } else {
+                            // 别的标签页已开过验证窗口：本标签页静默等待，不再弹窗
+                            console.log('[JavDB] ⚠️ 检测到风控，但其他标签页已打开验证窗口，本标签页静默等待');
+                        }
+                        return resolve(null);
+                    }
+
+                    try {
+                        const parsed = JSON.parse(res.responseText);
+                        if (parsed && parsed[0]) {
+                            return resolve(parsed[0].map(s => s[0] || '').join(''));
+                        }
+                    } catch (e) {}
+                    resolve(null);
+                },
+                onerror: () => resolve(null),
+                ontimeout: () => resolve(null)
+            });
+        });
+
+        // 分块翻译（合并 + 拆分 + 防污染 + 逐条降级）
+        const translateChunk = async ({ startIndex, items }) => {
+            if (items.length === 1) {
+                const t = await translateOne(items[0]);
+                // 🛡️ 防缓存污染：译文存在且与原文不同才写缓存
+                if (t && t !== items[0]) {
+                    cache[items[0]] = t;
+                    results[uncachedIndices[startIndex]] = t;
+                }
+                return;
+            }
+
+            const merged = await translateOne(items.join(SPLITTER));
+            const parts = merged ? merged.split(/\s*9527\s*/) : null;
+
+            if (parts && parts.length === items.length) {
+                items.forEach((orig, j) => {
+                    const t = (parts[j] || '').trim();
+                    if (t && t !== orig) {
+                        cache[orig] = t;
+                        results[uncachedIndices[startIndex + j]] = t;
+                    }
+                });
+            } else {
+                // 分隔符被破坏 → 降级逐条翻译（同样带防污染）
+                for (let j = 0; j < items.length; j++) {
+                    const t = await translateOne(items[j]);
+                    if (t && t !== items[j]) {
+                        cache[items[j]] = t;
+                        results[uncachedIndices[startIndex + j]] = t;
+                    }
+                }
+            }
+        };
+
+        // 🚀 并发限流池：同时最多 3 个请求在飞，避开瞬时并发风控
+        const CONCURRENCY_LIMIT = 3;
+        const executing = new Set();
+        for (const chunk of chunks) {
+            const p = translateChunk(chunk)
+                .then(() => executing.delete(p))
+                .catch(() => executing.delete(p));
+            executing.add(p);
+            if (executing.size >= CONCURRENCY_LIMIT) {
+                await Promise.race(executing);
+            }
+        }
+        await Promise.all(executing);
+
+        setMsCache(cache);
+        return results;
+    }
+
+    // ---------- 辅助函数：季集模式转换 ----------
+    function applySeasonPatterns(out) {
+        if (!out) return out;
+        out = out.replace(/\bS(\d{1,2})\s*[-.]?\s*E(\d{1,3})\b/gi, (m, s, e) => `第${parseInt(s,10)}季 第${parseInt(e,10)}集`);
+        out = out.replace(/\bSeason\s*(\d+)\b/gi, (m, n) => `第${parseInt(n,10)}季`);
+        out = out.replace(/\bEpisode\s*(\d+)\b/gi, (m, n) => `第${parseInt(n,10)}集`);
+        out = out.replace(/\bPart\s*(\d+)\b/gi, (m, n) => `第${parseInt(n,10)}部分`);
+        return out;
+    }
+
+    function restoreCaseFromOriginal(original, translated) {
+        if (!original || !translated) return translated;
+        const origLower = original.toLowerCase();
+        return translated.replace(/[a-z0-9][a-z0-9'\-]*(\s+[a-z0-9'\-]+)*/gi, (frag) => {
+            const idx = origLower.indexOf(frag.toLowerCase());
+            if (idx !== -1) return original.substr(idx, frag.length);
+            return frag;
+        });
+    }
+
+    // ---------- 辅助函数：残料二次翻译引擎 ----------
+    async function polishLeftovers(text) {
+        if (!text) return text;
+        const fragRegex = /[A-Za-z][A-Za-z'\-]*(?:\s+[A-Za-z][A-Za-z'\-]*)*/g;
+        const fragments = [...new Set(text.match(fragRegex) || [])].filter(f => f.length >= 3);
+        if (!fragments.length) return text;
+
+        const firstPass = await msTranslateBatch(fragments);
+        let out = text;
+        for (let i = 0; i < fragments.length; i++) {
+            const frag = fragments[i];
+            let trans = firstPass[i];
+
+            if (!trans || trans === frag) {
+                const lr = (await msTranslateBatch([frag.toLowerCase()]))[0];
+                if (lr && lr !== frag.toLowerCase()) {
+                    trans = restoreCaseFromOriginal(frag, lr);
+                }
+            }
+
+            if (trans && trans !== frag && /[\u4e00-\u9fa5]/.test(trans)) {
+                out = out.split(frag).join(trans);
+            }
+        }
+        return out;
+    }
+
+    // ---------- 辅助函数：判断是否需要跳过翻译 ----------
+    function shouldSkipMsTranslate(element) {
+        if (element.querySelector('.actor-section-name') || 
+            element.querySelector('.section-meta')) {
+            return true;
+        }
+        return false;
+    }
+
+    // ---------- 辅助函数：提取纯净核心文本（详情页用） ----------
+    function extractCoreText(element) {
+        return Array.from(element.childNodes)
+            .filter(n => {
+                if (n.nodeType === Node.TEXT_NODE) return true;
+                if (n.nodeType === Node.ELEMENT_NODE && 
+                    !n.classList.contains('copy-btn') && 
+                    !n.classList.contains('section-subtitle')) {
+                    return true;
+                }
+                return false;
+            })
+            .map(n => n.textContent)
+            .join('')
+            .replace(/\s+/g, ' ')
+            .trim();
+    }
+
+    // ---------- 辅助函数：提取完整显示文本（详情页用） ----------
+    function extractDisplayText(element) {
+        return Array.from(element.childNodes)
+            .filter(n => {
+                if (n.nodeType === Node.TEXT_NODE) return true;
+                if (n.nodeType === Node.ELEMENT_NODE && !n.classList.contains('copy-btn')) {
+                    return true;
+                }
+                return false;
+            })
+            .map(n => n.textContent)
+            .join('')
+            .replace(/\s+/g, ' ')
+            .trim();
+    }
+
+    // ---------- 【核心修复】列表项专用：提取文本并强制补空格 ----------
+    function extractListItemText(container) {
+        const nodesWithSpaceFlag = []; // 存储 { node, needsLeadingSpace }
+        
+        const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, {
+            acceptNode: function(node) {
+                if (!node.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
+                if (node.parentElement && node.parentElement.tagName === 'STRONG') {
+                    return NodeFilter.FILTER_REJECT;
+                }
+                // 🚀 核心修复：排除 tile-item 中的番号 div，防止番号被送去翻译
+                if (node.parentElement && node.parentElement.classList.contains('video-number')) {
+                    return NodeFilter.FILTER_REJECT;
+                }
+                if (node.parentElement && node.parentElement.dataset.msTranslated === 'true') {
+                    return NodeFilter.FILTER_REJECT;
+                }
+                return NodeFilter.FILTER_ACCEPT;
+            }
+        }, false);
+
+        let node;
+        while (node = walker.nextNode()) {
+            // 【关键】检查该文本节点的前一个兄弟元素是否为 STRONG
+            // 如果是，说明这是紧跟在番号后面的标题文本，需要补空格
+            let prevSibling = node.previousSibling;
+            // 处理可能存在的空白文本节点干扰
+            while (prevSibling && prevSibling.nodeType === Node.TEXT_NODE && !prevSibling.nodeValue.trim()) {
+                prevSibling = prevSibling.previousSibling;
+            }
+            
+            const needsSpace = prevSibling && prevSibling.nodeType === Node.ELEMENT_NODE && prevSibling.tagName === 'STRONG';
+            
+            nodesWithSpaceFlag.push({
+                node: node,
+                needsSpace: needsSpace
+            });
+        }
+        return nodesWithSpaceFlag;
+    }
+
+    // ---------- 创建统一标题容器（影片详情专用） ----------
+    function createMovieTitleWrapper(originalTitleEl, translatedText) {
+        if (originalTitleEl.nextElementSibling && 
+            originalTitleEl.nextElementSibling.classList.contains('ms-title-wrapper')) return;
+
+        const wrapper = document.createElement('div');
+        wrapper.className = 'ms-title-wrapper';
+        wrapper.style.cssText = `
+            margin-top: 4px; margin-bottom: 16px; padding: 10px 14px;
+            border-radius: 8px; background: rgba(128, 128, 128, 0.06);
+            max-width: 100%; box-sizing: border-box;
+        `;
+
+        const originalArea = document.createElement('div');
+        originalArea.className = 'ms-original-area';
+        originalArea.style.cssText = `
+            display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+            padding-bottom: 10px; border-bottom: 1px solid rgba(128, 128, 128, 0.2);
+        `;
+        
+        const fullTitleText = extractDisplayText(originalTitleEl);
+        const originalTextSpan = document.createElement('span');
+        originalTextSpan.textContent = fullTitleText;
+        originalTextSpan.style.cssText = `font-size: 1.2rem; font-weight: bold; line-height: 1.5; word-break: break-all; color: inherit;`;
+        originalArea.appendChild(originalTextSpan);
+
+        const origBtn = originalTitleEl.querySelector('.copy-btn');
+        if (origBtn) {
+            const newBtn = document.createElement('button');
+            newBtn.className = 'copy-btn';
+            newBtn.textContent = origBtn.textContent || '📋 复制标题';
+            newBtn.title = '点击复制标题';
+            newBtn.style.marginLeft = '10px';
+            newBtn.onclick = function(e) {
+                e.stopPropagation();
+                navigator.clipboard.writeText(fullTitleText).then(() => {
+                    const t = newBtn.textContent; newBtn.textContent = '✅ 已复制';
+                    setTimeout(() => newBtn.textContent = t, 1000);
+                }).catch(err => console.error('复制失败:', err));
+            };
+            originalArea.appendChild(newBtn);
+        }
+
+        const chineseArea = document.createElement('div');
+        chineseArea.className = 'ms-chinese-area';
+        chineseArea.style.cssText = `margin-top: 10px; display: inline-flex; align-items: center; gap: 10px; flex-wrap: wrap; max-width: 100%;`;
+
+        const cleanTrans = translatedText.replace(/\s+/g, ' ').trim();
+        const transSpan = document.createElement('span');
+        transSpan.textContent = cleanTrans;
+        transSpan.style.cssText = `font-weight: bold; font-size: 1.1rem; line-height: 1.4; word-break: break-all; color: #666;`;
+
+        const copyTransBtn = document.createElement('button');
+        copyTransBtn.className = 'copy-btn';
+        copyTransBtn.textContent = '📋 复制中文标题';
+        copyTransBtn.title = '点击复制中文标题';
+        copyTransBtn.style.cssText = `font-weight: normal; font-size: 12px; padding: 2px 8px; opacity: 0.8; white-space: nowrap;`;
+        copyTransBtn.onclick = function(e) {
+            e.stopPropagation();
+            navigator.clipboard.writeText(cleanTrans).then(() => {
+                const t = copyTransBtn.textContent; copyTransBtn.textContent = '✅ 已复制'; copyTransBtn.style.opacity = '1';
+                setTimeout(() => { copyTransBtn.textContent = t; copyTransBtn.style.opacity = '0.8'; }, 1000);
+            }).catch(() => console.error('复制中文标题失败'));
+        };
+
+        chineseArea.appendChild(transSpan);
+        chineseArea.appendChild(copyTransBtn);
+
+        wrapper.appendChild(originalArea);
+        wrapper.appendChild(chineseArea);
+        originalTitleEl.parentNode.insertBefore(wrapper, originalTitleEl.nextSibling);
+        originalTitleEl.style.display = 'none';
+        applyUnifiedTitleTheme(wrapper);
+    }
+
+    // ---------- 创建信息条目容器（系列/导演/片商专用） ----------
+    function createInfoItemWrapper(originalEl, translatedText, label) {
+        if (originalEl.nextElementSibling && 
+            originalEl.nextElementSibling.classList.contains('ms-info-wrapper')) return;
+
+        const wrapper = document.createElement('div');
+        wrapper.className = 'ms-info-wrapper';
+        wrapper.style.cssText = `
+            margin-top: 2px; margin-bottom: 12px; padding: 6px 12px;
+            border-radius: 6px; background: rgba(128, 128, 128, 0.04);
+            max-width: 100%; box-sizing: border-box;
+        `;
+
+        const displayOrig = extractDisplayText(originalEl);
+        const coreOrig = extractCoreText(originalEl);
+        const cleanTrans = translatedText.replace(/\s+/g, ' ').trim();
+
+        const origRow = document.createElement('div');
+        origRow.style.cssText = `display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 6px;`;
+        
+        const origSpan = document.createElement('span');
+        origSpan.textContent = displayOrig;
+        origSpan.style.cssText = `font-size: 1rem; font-weight: bold; color: inherit;`;
+        origRow.appendChild(origSpan);
+
+        const origBtn = originalEl.querySelector('.copy-btn');
+        if (origBtn) {
+            const newBtn = document.createElement('button');
+            newBtn.className = 'copy-btn';
+            newBtn.textContent = origBtn.textContent;
+            newBtn.title = origBtn.title;
+            newBtn.style.marginLeft = '10px';
+            newBtn.onclick = function(e) {
+                e.stopPropagation();
+                navigator.clipboard.writeText(coreOrig).then(() => {
+                    const t = newBtn.textContent; newBtn.textContent = '✅ 已复制';
+                    setTimeout(() => newBtn.textContent = t, 1000);
+                });
+            };
+            origRow.appendChild(newBtn);
+        }
+
+        const transRow = document.createElement('div');
+        transRow.style.cssText = `display: flex; align-items: center; gap: 10px; flex-wrap: wrap;`;
+
+        const transSpan = document.createElement('span');
+        transSpan.textContent = `${label}：${cleanTrans}`;
+        transSpan.style.cssText = `font-weight: bold; font-size: 0.95rem; color: #666;`;
+
+        const copyTransBtn = document.createElement('button');
+        copyTransBtn.className = 'copy-btn';
+        copyTransBtn.textContent = `📋 复制中文${label}`;
+        copyTransBtn.title = `点击复制中文${label}`;
+        copyTransBtn.style.cssText = `font-weight: normal; font-size: 12px; padding: 2px 8px; opacity: 0.8; white-space: nowrap;`;
+        copyTransBtn.onclick = function(e) {
+            e.stopPropagation();
+            navigator.clipboard.writeText(cleanTrans).then(() => {
+                const t = copyTransBtn.textContent; copyTransBtn.textContent = '✅ 已复制'; copyTransBtn.style.opacity = '1';
+                setTimeout(() => { copyTransBtn.textContent = t; copyTransBtn.style.opacity = '0.8'; }, 1000);
+            });
+        };
+
+        transRow.appendChild(transSpan);
+        transRow.appendChild(copyTransBtn);
+
+        wrapper.appendChild(origRow);
+        wrapper.appendChild(transRow);
+        originalEl.parentNode.insertBefore(wrapper, originalEl.nextSibling);
+        originalEl.style.display = 'none';
+        applyInfoWrapperTheme(wrapper);
+    }
+
+    // ---------- 主题适配 ----------
+    function applyUnifiedTitleTheme(wrapper) {
+        if (!wrapper) return;
+        const theme = document.documentElement.getAttribute('data-theme') || 'light';
+        const span = wrapper.querySelector('.ms-chinese-area span');
+        const div = wrapper.querySelector('.ms-original-area');
+        if (theme === 'dark') {
+            wrapper.style.background = 'rgba(255,255,255,0.04)';
+            if (div) div.style.borderBottomColor = 'rgba(255,255,255,0.1)';
+            if (span) span.style.color = '#aaa';
+        } else {
+            wrapper.style.background = 'rgba(0,0,0,0.03)';
+            if (div) div.style.borderBottomColor = 'rgba(0,0,0,0.1)';
+            if (span) span.style.color = '#666';
+        }
+    }
+
+    function applyInfoWrapperTheme(wrapper) {
+        if (!wrapper) return;
+        const theme = document.documentElement.getAttribute('data-theme') || 'light';
+        const span = wrapper.querySelector('.ms-info-wrapper > div:last-child span');
+        if (theme === 'dark') {
+            wrapper.style.background = 'rgba(255,255,255,0.03)';
+            if (span) span.style.color = '#aaa';
+        } else {
+            wrapper.style.background = 'rgba(0,0,0,0.02)';
+            if (span) span.style.color = '#666';
+        }
+    }
+
+    function observeMsThemes() {
+        const observer = new MutationObserver(mutations => {
+            mutations.forEach(m => {
+                if (m.attributeName === 'data-theme') {
+                    document.querySelectorAll('.ms-title-wrapper').forEach(applyUnifiedTitleTheme);
+                    document.querySelectorAll('.ms-info-wrapper').forEach(applyInfoWrapperTheme);
+                }
+            });
+        });
+        observer.observe(document.documentElement, { attributes: true });
+    }
+
+    // ---------- 元素级翻译（智能分发 + 列表页强制空格） ----------
+    async function msTranslateElement(element) {
+        if (!element || element.dataset.msTranslated === 'true' || element.dataset.msTranslated === 'pending') return;
+        element.dataset.msTranslated = 'pending';
+        element.dataset.msProtected = 'true';
+
+        try {
+            // 检查是否为需要跳过的特殊元素
+            if (shouldSkipMsTranslate(element)) {
+                element.dataset.msTranslated = 'skipped';
+                return;
+            }
+
+            // 【列表页处理】精准定位、保护番号、强制补空格、翻译Title
+            if (element.classList.contains('box') || element.classList.contains('tile-item')) {
+                // 1. 翻译悬浮提示 title 属性
+                const originalTitleAttr = element.getAttribute('title');
+                if (originalTitleAttr && originalTitleAttr.trim().length > 0) {
+                    const titleResults = await msTranslateBatch([originalTitleAttr]);
+                    if (titleResults[0] && titleResults[0] !== originalTitleAttr) {
+                        element.setAttribute('title', titleResults[0].replace(/\s+/g, ' ').trim());
+                    }
+                }
+
+                // 2. 翻译可见文本（排除 strong 番号，强制补空格）
+                const titleContainer = element.querySelector('.video-title, .article-title') || element; // 🚀 增加 .article-title
+                const nodesData = extractListItemText(titleContainer);
+
+                if (nodesData.length > 0) {
+                    const texts = nodesData.map(d => d.node.textContent);
+                    const results = await msTranslateBatch(texts);
+
+                    // 回填译文
+                    for (let i = 0; i < results.length; i++) {
+                        let translated = results[i];
+                        if (!translated) continue;
+
+                        // 🚀 后置抛光：季集转换 + 残料二次翻译
+                        translated = applySeasonPatterns(translated);
+                        translated = await polishLeftovers(translated);
+
+                        if (translated !== texts[i]) {
+                            let finalText = translated.trim();
+                            // 【核心修复】如果标记为需要空格，且译文开头不是空格，则手动补一个
+                            if (nodesData[i].needsSpace && !finalText.startsWith(' ')) {
+                                finalText = ' ' + finalText;
+                            }
+                            nodesData[i].node.nodeValue = finalText;
+                        }
+                    }
+                }
+
+                element.dataset.msTranslated = 'true';
+                return;
+            }
+
+            // 【详情页处理】h2.title.is-4
+            const isInfoItem = element.querySelector('.section-subtitle') !== null;
+            const rawText = extractCoreText(element);
+
+            if (rawText.length === 0) {
+                element.dataset.msTranslated = 'true';
+                return;
+            }
+
+            // 🚀 番号保护：送翻前剥离番号，杜绝 "MIRD-102" 被翻成 "死了-102"
+            const CAR_NUM_RE = /^[A-Za-z0-9_.@&-]+-\d+[A-Za-z0-9_.@&-]*$/i;
+            let carNum = '';
+            let textToTranslate = rawText;
+
+            if (!isInfoItem) {
+                // 优先取「复制番号」按钮/首个 strong 的精确番号，并用番号格式校验，防止把整条标题误当番号
+                let code = (typeof extractDetailCode === 'function') ? (extractDetailCode() || '') : '';
+                if (code && CAR_NUM_RE.test(code)) carNum = code;
+
+                if (carNum && textToTranslate.includes(carNum)) {
+                    textToTranslate = textToTranslate.split(carNum).join('').trim();
+                } else {
+                    // 兜底：按正则剥离开头的番号串
+                    const m = textToTranslate.match(/^([A-Za-z0-9_.@&-]+-\d+[A-Za-z0-9_.@&-]*)\s+/);
+                    if (m) {
+                        carNum = m[1];
+                        textToTranslate = textToTranslate.slice(m[0].length).trim();
+                    }
+                }
+            }
+
+            if (textToTranslate.length === 0) {
+                element.dataset.msTranslated = 'true';
+                return;
+            }
+
+            const results = await msTranslateBatch([textToTranslate]);
+            let translated = results[0];
+
+            if (translated && translated !== textToTranslate) {
+                // 先抛光（季集模式 + 残料二次翻译），再原样拼回番号，
+                // 确保番号不会进入谷歌/抛光流程被二次处理
+                translated = applySeasonPatterns(translated);
+                translated = await polishLeftovers(translated);
+                const finalText = carNum ? `${carNum} ${translated}` : translated;
+
+                if (isInfoItem) {
+                    const subtitleEl = element.querySelector('.section-subtitle');
+                    const label = subtitleEl ? subtitleEl.textContent.trim() : '信息';
+                    createInfoItemWrapper(element, finalText, label);
+                } else {
+                    createMovieTitleWrapper(element, finalText);
+                }
+            } else {
+                // API 失败，不打上 true 标记，允许下次重试
+                element.dataset.msTranslated = 'failed';
+            }
+        } catch (e) {
+            console.error('[JavDB 增强助手] 谷歌翻译元素失败:', e);
+            element.dataset.msTranslated = 'failed';
+        }
+    }
+
+    // ---------- 入口函数（列表页并发优化版） ----------
+    async function runMsTranslation() {
+        if (!config.translation) return;
+        try {
+            const elements = document.querySelectorAll(MS_TRANSLATE_SELECTORS);
+            const pending = Array.from(elements).filter(el =>
+                el.dataset.msTranslated !== 'true' && 
+                el.dataset.msTranslated !== 'pending' &&
+                el.dataset.msTranslated !== 'skipped'
+            );
+            if (pending.length === 0) return;
+
+            // 【优化】列表页 .box 元素先批量收集文本，一次性翻译后再回填
+            // 🚀 核心修复：同时识别 .box、.tile-item 和 .article-item 为列表项，走批量翻译通道
+            const listItems = pending.filter(el => el.classList.contains('box') || el.classList.contains('tile-item') || el.classList.contains('article-item'));
+            const detailItems = pending.filter(el => !el.classList.contains('box') && !el.classList.contains('tile-item') && !el.classList.contains('article-item'));
+
+            // 列表页并发处理：收集所有待翻译文本 → 单次批量API → 统一回填
+            if (listItems.length > 0) {
+                const allTexts = [];
+                const allNodeRefs = []; // { node, needsSpace, itemIndex }
+                const titleAttrMap = []; // { element, originalTitle }
+
+                // 第一轮：收集
+                for (const item of listItems) {
+                    item.dataset.msTranslated = 'pending';
+                    item.dataset.msProtected = 'true';
+
+                    // 收集 title 属性
+                    const origTitle = item.getAttribute('title');
+                    if (origTitle && origTitle.trim()) {
+                        titleAttrMap.push({ element: item, originalTitle: origTitle });
+                        allTexts.push(origTitle);
+                        allNodeRefs.push(null); // title 占位标记
+                    }
+
+                    // 收集可见文本节点
+                    const container = item.querySelector('.video-title') || item;
+                    const nodesData = extractListItemText(container);
+                    for (const d of nodesData) {
+                        allTexts.push(d.node.textContent);
+                        allNodeRefs.push({ node: d.node, needsSpace: d.needsSpace, isTitle: false });
+                    }
+                }
+
+                // 第二轮：单次批量翻译
+                if (allTexts.length > 0) {
+                    const results = await msTranslateBatch(allTexts);
+
+                    // 第三轮：统一回填
+                    let titleIdx = 0;
+                    for (let i = 0; i < results.length; i++) {
+                        const ref = allNodeRefs[i];
+                        let translated = results[i];
+                        
+                        // 如果 API 失败 (null)，跳过
+                        if (!translated) continue;
+
+                        // 🚀 后置抛光：季集转换 + 残料二次翻译
+                        translated = applySeasonPatterns(translated);
+                        translated = await polishLeftovers(translated);
+
+                        if (ref === null) {
+                            // 回填 title 属性
+                            const map = titleAttrMap[titleIdx++];
+                            if (map && translated !== map.originalTitle) {
+                                map.element.setAttribute('title', translated.replace(/\s+/g, ' ').trim());
+                            }
+                        } else {
+                            // 回填文本节点
+                            let finalText = translated.trim();
+                            if (ref.needsSpace && !finalText.startsWith(' ')) {
+                                finalText = ' ' + finalText;
+                            }
+                            if (finalText !== ref.node.textContent) {
+                                ref.node.nodeValue = finalText;
+                            }
+                        }
+                    }
+                }
+
+                // 标记完成
+                for (const item of listItems) {
+                    item.dataset.msTranslated = 'true';
+                }
+            }
+
+            // 详情页仍逐个处理（数量少，且有UI构建开销）
+            for (const el of detailItems) {
+                await msTranslateElement(el);
+            }
+
+            observeMsThemes();
+        } catch(e) {
+            console.error('[JavDB 增强助手] 谷歌翻译出错:', e);
+        }
+    }
+
+    // 监听 DOM 变化，处理动态加载的内容 - 恢复原版的高频监听实现
+    function observeDOMChanges() {
+        const observer = new MutationObserver(() => {
+            if (config.translation) {
+                translateTextNodes(document.body);
+                translatePlaceholders();
+                translateTitle();
+                translateButtonValues();
+                translateTooltipAttributes(); 
+                translateTitleAttributes();
+                translateDataConfirmAttributes(); 
+            }
+            // 【已删除】autoClickAgeVerificationFast() 不能放在这里，否则会创建无数个定时器导致卡死
+            
+            if (config.hideTopNavExtras) {
+                document.querySelectorAll('nav.sub-header, div.top-meta').forEach(el => el.remove()); 
+            }
+            if (config.hideSearchKeywords) {
+                document.querySelectorAll('div.search-recent-keywords').forEach(el => el.remove()); 
+            }
+            if (config.fixVipCover) {
+                fixMemberExclusiveVideo(); 
+            }
+            if (config.showOriginTitle) {
+                fixOriginTitle(); 
+            }
+            if (config.copyButtons) {
+                addCopyButtons(); 
+            }
+            if (config.paginationJump) {
+                enhancePaginationJump(); 
+            }
+            if (config.openNewTab) {
+                applyOpenInNewTab(); 
+            }
+            // 内置谷歌翻译增强（在本地词典之后执行，共用翻译开关）
+            if (config.translation) {
+                setTimeout(runMsTranslation, 500);
+            }
+            
+            // --- 动态加载时补充已下载标记按钮 ---
+            if (config.downloadMark) {
+                applyDownloadMarks();    // 列表页封面标记
+                applyDetailPageMark();   // 详情页封面标记
+            }
+            if (config.loadReviews) {
+                mergeThirdPartyReviews();
+            }
+        });
+        
+        // 尝试安全地添加观察者
+        if (document.body) {
+            observer.observe(document.body, { childList: true, subtree: true });
+        } else {
+            document.addEventListener('DOMContentLoaded', () => {
+                observer.observe(document.body, { childList: true, subtree: true });
+            });
+        }
+        if (config.copyButtons) {
+            observeThemeChange(); 
+        }
+    }
+  
+    // 初始化：执行翻译、自动点击及监听
+    function init() {
+        loadConfig();
+        loadWatched();              // 读取已下载记录
+        setupWatchedSync();         // 注册跨标签页同步
+        injectStyles();
+        setupAutoReloadOn503();     // 503错误页自动重载
+        
+        // 尽早执行链接重写（在DOMContentLoaded之前）
+        if (config.linkRewrite) {
+            rewriteLinksToTempDomain();
+        }
+        setupVipLinkObserver();
+        
+        if (document.body) {
+            const { panel, overlay } = createSettingsPanel();
+            createSettingsTrigger(panel, overlay);
+            
+            // 执行初次翻译
+            translationStatus.success = runTranslation();
+            if (!translationStatus.success && config.translation) {
+                setupAutoRetry();
+            }
+            
+            // 添加手动触发按钮
+            if (config.retryButton) {
+                addRetryButton();
+            }
+            addCopyButtons();
+            createWatchedUI();      // 已下载列表触发按钮+面板
+            fixMemberExclusiveVideo();
+            fixOriginTitle();
+            enhancePaginationJump();
+            applyOpenInNewTab();   // 全局链接新窗口打开
+            hookSearchOpenNewTab(); // 🚀 搜索新窗口 + 分页当前页
+            autoClickAgeVerificationFast();
+            attachSearchTypeListener();
+            // 初始谷歌翻译增强
+            if (config.translation) {
+                setTimeout(runMsTranslation, 1000);
+            }
+            observeDOMChanges();
+            if (config.copyButtons) {
+                applyButtonTheme(); // 初次应用按钮主题
+            }
+            if (config.downloadMark) {
+                applyDownloadMarks(); // 列表页封面标记按钮
+                applyDetailPageMark(); // 详情页封面标记按钮
+            }
+            if (config.loadReviews) {
+                mergeThirdPartyReviews();
+            }
+            if (config.loadRelated) {
+                initRelatedEnhancement();
+            }
+        } else {
+            document.addEventListener('DOMContentLoaded', () => {
+                init();
+            });
+        }
+    }
+  
+    // 确保在DOMContentLoaded时也执行一次链接重写
+    document.addEventListener('DOMContentLoaded', () => {
+        if (config.linkRewrite) {
+            setTimeout(rewriteLinksToTempDomain, 0);
+        }
+    });
+    
+    // 等待页面加载完成后初始化
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', init);
+    } else {
+        init();
+    }
+})();
