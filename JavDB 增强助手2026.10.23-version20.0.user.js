@@ -1444,8 +1444,9 @@
                 // 与资讯页文章卡片(a.article-item.box .cover img)等所有带 .cover 的封面图
                 selector: '.cover img',
                 dataAttribute: 'data-full',
-                maxWidth: 1000,
-                maxHeight: 1000,
+                // 尺寸上限不再固定 1000px（资讯大图常超出屏幕），而是动态取视口的 90%
+                maxWidth: Math.floor(window.innerWidth * 0.9),
+                maxHeight: Math.floor(window.innerHeight * 0.9),
                 offsetX: 20,
                 offsetY: 20,
                 zIndex: 2147483530,
@@ -1483,8 +1484,6 @@
                 }
                 .image-hover-preview.active { opacity: 1; }
                 .image-hover-preview img {
-                    max-width: ${this.config.maxWidth}px;
-                    max-height: ${this.config.maxHeight}px;
                     display: block; object-fit: contain;
                 }
                 .image-hover-preview.loading::before {
@@ -1571,13 +1570,19 @@
             img.src = imgUrl;
         }
         calculateImageSize(img) {
+            // 每次计算时动态取当前视口尺寸（窗口缩放后也能适应），最大不超过视口的 90%
+            const maxW = Math.floor(window.innerWidth * 0.9);
+            const maxH = Math.floor(window.innerHeight * 0.9);
             let width = img.naturalWidth, height = img.naturalHeight;
-            if (width > this.config.maxWidth || height > this.config.maxHeight) {
-                const ratio = Math.min(this.config.maxWidth / width, this.config.maxHeight / height);
+            if (width > maxW || height > maxH) {
+                const ratio = Math.min(maxW / width, maxH / height);
                 width *= ratio;
                 height *= ratio;
             }
-            return { width, height };
+            // 兜底：即使比例计算有误差，也绝不允许超过视口可用范围
+            width = Math.min(width, maxW);
+            height = Math.min(height, maxH);
+            return { width: Math.round(width), height: Math.round(height) };
         }
         handleMouseMove(e) {
             if (!this.currentTarget || !this.preview.classList.contains('active')) return;
@@ -1585,10 +1590,13 @@
             let left = e.clientX + offsetX, top = e.clientY + offsetY;
             if (this.config.autoAdjustPosition) {
                 const pw = this.preview.offsetWidth, ph = this.preview.offsetHeight;
-                if (left + pw > window.innerWidth) left = e.clientX - pw - offsetX;
-                if (top + ph > window.innerHeight) top = e.clientY - ph - offsetY;
-                left = Math.max(0, left);
-                top = Math.max(0, top);
+                const vw = window.innerWidth, vh = window.innerHeight;
+                // 先尝试常规位置（鼠标右下），越界则翻转到左上
+                if (left + pw > vw) left = e.clientX - pw - offsetX;
+                if (top + ph > vh) top = e.clientY - ph - offsetY;
+                // 翻转后仍越界（如图几乎占满视口）：直接夹紧到视口内，保证完整可见不超出屏幕
+                left = Math.max(0, Math.min(left, vw - pw));
+                top = Math.max(0, Math.min(top, vh - ph));
             }
             this.preview.style.left = `${left}px`;
             this.preview.style.top = `${top}px`;
