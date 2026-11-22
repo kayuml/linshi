@@ -519,6 +519,13 @@
     const JHS_ACTRESS_API_URL = "https://ja.wikipedia.org/wiki/";
     
     async function loadActressInfo() {
+        // 在页面右下角显示调试状态
+        const debugDiv = document.createElement('div');
+        debugDiv.id = 'jhs-actress-debug';
+        debugDiv.style.cssText = 'position:fixed;bottom:10px;right:10px;background:#ff0;color:#000;padding:10px;z-index:99999;font-size:12px;max-width:300px;word-wrap:break-word;';
+        debugDiv.textContent = '[JavDB增强] loadActressInfo 已启动，正在执行...';
+        document.body.appendChild(debugDiv);
+        
         console.log("[JavDB增强] ========== loadActressInfo 调用 ==========");
         console.log("[JavDB增强] config.loadActressInfo:", config.loadActressInfo);
         console.log("[JavDB增强] 当前URL:", window.location.pathname);
@@ -526,14 +533,17 @@
         
         if (!config.loadActressInfo) {
             console.log("[JavDB增强] 功能未启用，退出");
+        debugDiv.textContent = "[JavDB增强] 功能未启用"; setTimeout(() => debugDiv.remove(), 3000);
             return;
         }
         if (!window.location.pathname.startsWith('/v/')) {
             console.log("[JavDB增强] 不是详情页，退出");
+        debugDiv.textContent = "[JavDB增强] 不是详情页"; setTimeout(() => debugDiv.remove(), 3000);
             return;
         }
         if (loadActressInfo._loaded) {
             console.log("[JavDB增强] 已经加载过，退出");
+        debugDiv.textContent = "[JavDB增强] 已加载过"; setTimeout(() => debugDiv.remove(), 3000);
             return;
         }
         
@@ -598,6 +608,7 @@
         
         if (nameList.length === 0) {
             console.log("[JavDB增强] 重试次数已用完，仍未找到任何演员，退出");
+        debugDiv.textContent = "[JavDB增强] 未找到演员"; setTimeout(() => debugDiv.remove(), 3000);
             return;
         }
         
@@ -681,6 +692,7 @@
         
         localStorage.setItem(cacheKey, JSON.stringify(cacheData));
         console.log("[JavDB增强] loadActressInfo 执行完成");
+        debugDiv.textContent = "[JavDB增强] 执行完成"; debugDiv.style.background = "#0f0"; setTimeout(() => debugDiv.remove(), 3000);
     }
     
     async function fetchActressInfo(name) {
