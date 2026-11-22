@@ -1,7 +1,7 @@
 // ==UserScript==  
 // @name         JavDB 增强助手
 // @namespace    
-// @version      2026.10.24-version21.2
+// @version      2026.10.24-version21.3
 // @description  JavDB 全站增强：① 深度汉化——繁简转换 + 内置谷歌翻译引擎（防缓存污染/并发限流/风控重试/残料二次翻译/季集转换），覆盖标题、资讯与关联列表；② 预览升级——DMM/FANZA 高画质预告片解析与一键画质切换、详情页长缩略图、封面就地播放、悬浮大图、大屏居中播放器；③ 浏览体验——自动关闭年龄验证、自动关闭应用推广横幅、会员封面修复、原标题显示、主题自适应复制按钮、分页优化与跳页、毛玻璃搜索栏、链接新窗口、弹窗打开详情、域名自动重写、503 自动重试；④ 数据管理——评论与磁链增强、相关清单绕过 VIP、已下载标记与管理、本地/WebDAV 备份，全功能可开关
 // @author       admin
 // @include      https://javdb*.com/*  
@@ -531,6 +531,25 @@
         const isDetailPage = path.startsWith('/v/');
         if (!isStarPage && !isDetailPage) return;
 
+        // 本功能专用样式：详情页三组标签强制单行（窄面板时出主题细滚动条而不是折行）；演员页按 JHS 双行字段排布
+        if (!loadActressInfo._styled) {
+            loadActressInfo._styled = true;
+            GM_addStyle(`
+                .actress-info.ht-detail-row { flex-wrap: wrap; row-gap: 4px; align-items: center; }
+                .actress-info .ht-tag-line { display: flex; flex-wrap: nowrap; gap: 4px; max-width: 100%; overflow-x: auto; margin-left: 5px; padding-bottom: 2px; scrollbar-width: thin; scrollbar-color: rgba(64,158,255,.45) transparent; }
+                .actress-info .ht-tag-line .jhs-info-tag { flex: 0 0 auto; margin: 0; font-size: 11px; height: 22px; line-height: 20px; padding: 0 6px; white-space: nowrap; }
+                .actress-info .ht-tag-line::-webkit-scrollbar { height: 4px; }
+                .actress-info .ht-tag-line::-webkit-scrollbar-track { background: transparent; }
+                .actress-info .ht-tag-line::-webkit-scrollbar-thumb { background: rgba(64,158,255,.45); border-radius: 2px; }
+                .actress-info .ht-tag-line::-webkit-scrollbar-thumb:hover { background: rgba(64,158,255,.8); }
+                .ht-star-fields { font-size: 17px; font-weight: normal; margin-top: 5px; }
+                .ht-star-fields .ht-star-row { display: flex; flex-wrap: wrap; margin-bottom: 10px; }
+                .ht-star-fields .ht-star-row span { white-space: nowrap; }
+                .ht-star-fields .ht-f300 { width: 300px; max-width: 100%; }
+                .ht-star-fields .ht-f200 { width: 200px; max-width: 100%; }
+            `);
+        }
+
         const cacheKey = 'jhs_actress_info_cache';
         const cacheData = (() => {
             try { return JSON.parse(localStorage.getItem(cacheKey)) || {}; }
@@ -540,10 +559,23 @@
             try { localStorage.setItem(cacheKey, JSON.stringify(cacheData)); } catch (e) {}
         };
 
-        // 信息分三组展示：① 生日+年龄 ② 身高+体重 ③ 三围+罩杯
+        // 生日规范化：去掉"（24歳）"这类年龄附注与年月日前后的多余空格
+        const cleanBirthday = raw => (raw || '')
+            .replace(/[（(]\s*\d+\s*[歳岁]\s*[）)]/g, '')
+            .replace(/\s*([年月日])\s*/g, '$1')
+            .trim();
+
+        // 三围规范化：统一为 "87 - 59 - 90cm"，保证带单位
+        const withCm = raw => {
+            let s = (raw || '').replace(/\s*cm\s*/gi, 'cm').trim();
+            if (s && !/cm$/i.test(s)) s += 'cm';
+            return s;
+        };
+
+        // 影片详情页：三组标签 ① 生日+年龄 ② 身高+体重 ③ 三围+罩杯，同一排显示
         const buildTags = info => {
-            const birthday = (info.birthday || '').replace(/[（(]\s*\d+\s*[歳岁]\s*[）)]/g, '').trim();
-            const threeSize = (info.threeSize || '').replace(/\s*cm\s*/gi, 'cm').trim();
+            const birthday = cleanBirthday(info.birthday);
+            const threeSize = withCm(info.threeSize);
             return [
                 [birthday, info.age],
                 [info.height, info.weight],
@@ -552,7 +584,7 @@
                 .map(group => group.filter(Boolean).join(' '))
                 .filter(Boolean)
                 .map(text => `<span class="jhs-info-tag">${text}</span>`)
-                .join('\n                            ');
+                .join('');
         };
 
         // 依次尝试名字/别名，命中一个即可（维基百科词条可能只存在于某个名下）
@@ -571,7 +603,7 @@
         };
 
         if (isStarPage) {
-            // ===== 演员详情页：在女优名标题下方追加信息（对齐 JAV-JHS handleStarPage）=====
+            // ===== 演员详情页：按 JAV-JHS 截图样式双行显示（出生日期/年龄/身高 + 体重/三围/罩杯），三围带 cm =====
             const nameEl = document.querySelector('.actor-section-name');
             if (!nameEl) return;
             const names = [];
@@ -580,7 +612,7 @@
                 if (n && !names.includes(n)) names.push(n);
             });
             pushNames(nameEl.textContent.trim());
-            // section-meta 里可能是别名；排除"共xx部影片"这类统计文字
+            // section-meta 里可能是旧艺名/别名；排除"共xx部影片"这类统计文字
             document.querySelectorAll('.section-meta').forEach(el => {
                 const t = el.textContent.trim();
                 if (t && !t.includes('影片')) pushNames(t);
@@ -593,14 +625,27 @@
             saveCache();
 
             const html = info
-                ? `<a class="actress-info" href="${info.url}" target="_blank" style="display: block; font-weight: normal; margin-top: 5px;">${buildTags(info)}</a>`
+                ? `<a class="actress-info" href="${info.url}" target="_blank">
+                        <div class="ht-star-fields">
+                            <div class="ht-star-row">
+                                <span class="ht-f300">出生日期: ${cleanBirthday(info.birthday)}</span>
+                                <span class="ht-f200">年龄: ${info.age}</span>
+                                <span class="ht-f200">身高: ${info.height}</span>
+                            </div>
+                            <div class="ht-star-row">
+                                <span class="ht-f300">体重: ${info.weight}</span>
+                                <span class="ht-f200">三围: ${withCm(info.threeSize)}</span>
+                                <span class="ht-f200">罩杯: ${info.braSize}</span>
+                            </div>
+                        </div>
+                    </a>`
                 : `<div class="actress-info" style="font-size: 14px; font-weight: normal; margin-top: 5px; color: #999;">暂无此演员信息</div>`;
             nameEl.parentElement.insertAdjacentHTML('beforeend', html);
             console.log(`[JavDB增强] 演员页信息加载${info ? '成功' : '失败（暂无信息）'}`);
             return;
         }
 
-        // ===== 影片详情页：在"演員"栏后插入每位女优的信息 =====
+        // ===== 影片详情页：在"演員"栏后插入每位女优的信息，三组标签一排显示 =====
         let nameList = [];
 
         // 选择器1: .actor-female
@@ -655,11 +700,9 @@
 
             if (info) {
                 infoHtml += `
-                    <div class="panel-block actress-info">
+                    <div class="panel-block actress-info ht-detail-row">
                         <strong style="margin-right: 5px;"><span style="user-select: all">${name}</span>: </strong>
-                        <a href="${info.url}" style="margin-left: 5px" target="_blank">
-                            ${buildTags(info)}
-                        </a>
+                        <a class="ht-tag-line" href="${info.url}" target="_blank">${buildTags(info)}</a>
                     </div>
                 `;
             } else {
@@ -687,7 +730,6 @@
 
         saveCache();
     }
-    
     async function fetchActressInfo(name) {
         // 特殊名称处理
         if (name === '三上悠亞') name = '三上悠亜';
