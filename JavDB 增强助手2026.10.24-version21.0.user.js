@@ -44,6 +44,7 @@
         hideAISexyGirlfriend: false,      // 隐藏AI色色女友💋入口
         hideTopNavExtras: false,     // 隐藏顶部外部功能区
         hideSearchKeywords: false,   // 隐藏搜索区域热搜关键词
+        hideMagnetSubmit: false,     // 隐藏提交磁链控件
         copyButtons: true,          // 添加复制按钮（默认开启）
         fixVipCover: false,          // 修复会员专属封面
         showOriginTitle: true,      // 自动显示原标题（默认开启）
@@ -671,6 +672,15 @@
         function hideRelatedPanel() {
             customLi.classList.remove('is-active');
             contentPanel.style.display = 'none';
+            
+            // 🚀 修复：恢复被我们隐藏的原生元素，让原生 Tab 切换逻辑正常工作
+            // 只恢复 display 属性，不改变其他样式
+            document.querySelectorAll('#reviews, #magnets-content, [data-movie-tab-target="reviews"], [data-movie-tab-target="magnets"]').forEach(el => {
+                // 清除我们设置的 inline style，让原生 CSS 重新接管
+                if (el.style.display === 'none') {
+                    el.style.display = '';
+                }
+            });
         }
 
         // 5. 绑定点击事件
@@ -1025,6 +1035,7 @@
             { key: 'hideAISexyGirlfriend', label: '隐藏AI色色女友💋', desc: '隐藏AI色色女友💋链接' },
             { key: 'hideTopNavExtras', label: '隐藏顶部外部功能区', desc: '隐藏顶部的域名/公告栏和磁链页顶部的官方App/加入TG频道推广按钮' },
             { key: 'hideSearchKeywords', label: '隐藏热搜关键词列表', desc: '隐藏搜索栏下方的热搜关键词（LUXU、VR、无码流出等）区域' },
+            { key: 'hideMagnetSubmit', label: '隐藏提交磁链控件', desc: '隐藏磁链页面的"提交磁链"按钮和顶部导航栏的"提交的磁链"链接' },
             { key: 'copyButtons', label: '添加复制按钮', desc: '为标题、系列等添加复制按钮' },
             { key: 'fixVipCover', label: '修复会员封面', desc: '将会员专属封面恢复为普通封面' },    
             { key: 'showOriginTitle', label: '自动显示原标题', desc: '自动显示影片原标题' },    
@@ -3456,6 +3467,14 @@
                 div.search-recent-keywords {
                     display: none !important;
                 }
+            `;
+        }
+
+        // 立即通过 CSS 隐藏提交磁链控件（彻底隐藏），防止刷新时短暂显示
+        if (config.hideMagnetSubmit) {
+            styles += `
+                div.submit-magnet { display: none !important; }
+                a.navbar-item[href="/users/magnet_submissions"] { display: none !important; }
             `;
         }
         
