@@ -2664,6 +2664,32 @@
         document.head.appendChild(style);
     }
 
+    // ===== 画质工具条位置跟随：弹窗模式下恒紧贴视频正下方居中（截图效果） =====
+    function stopToolbarFollow(toolbar) {
+        if (toolbar && toolbar._jhsFollowRaf) {
+            cancelAnimationFrame(toolbar._jhsFollowRaf);
+            toolbar._jhsFollowRaf = 0;
+        }
+    }
+
+    function startToolbarFollow(toolbar, getVideo) {
+        stopToolbarFollow(toolbar);
+        const tick = () => {
+            toolbar._jhsFollowRaf = 0;
+            if (!toolbar.isConnected) return; // 已被外部清理 → 自动退出，不残留循环
+            const v = getVideo();
+            if (!v || !isJhsPlayerOpened(v)) { toolbar.remove(); return; } // 弹窗关闭 → 移除工具条并退出
+            const r = v.getBoundingClientRect();
+            if (r.width > 0 && r.height > 0) {
+                toolbar.style.top = Math.round(r.bottom + 12) + 'px';
+                toolbar.style.left = Math.round(r.left + r.width / 2) + 'px';
+            }
+            toolbar._jhsFollowRaf = requestAnimationFrame(tick);
+        };
+        toolbar._jhsFollowRaf = requestAnimationFrame(tick);
+    }
+
+
     // 在 video 所在容器底部渲染画质切换按钮组（工具条只跟随视频播放器，绝不插入图片预览网格）
     function bindQualityButtons(videoEl, dmmVideoMap, defaultQuality) {
         // 【修复】视频不可见时不渲染工具条，防止关闭后残留在图片网格旁
@@ -2690,46 +2716,41 @@
             parent = wrap;
         }
     
+        // 🚀 弹窗模式判定：视频在 fancybox 内时，工具条挂到"视频正下方"——
+        // 位于内容盒之外（不参与弹窗尺寸计算 → 无黑边），且跟随视频而非固定屏幕底部
+        const inFancybox = !!(videoEl.closest && videoEl.closest('.fancybox__container, .fancybox-container'));
+        const toolbarHost = inFancybox ? document.body : parent;
+
         // 幂等：以用户实际选择的画质为键，而非永远不变的 _jhsDefaultQuality
         const currentKey = videoEl.dataset.jhsQuality || defaultQuality;
-        const existingToolbar = parent.querySelector(':scope > #video-bottom-toolbar');
+        const existingToolbar = toolbarHost.querySelector(':scope > #video-bottom-toolbar');
         if (existingToolbar) {
-            if (existingToolbar.dataset.jhsQuality === currentKey) return;
+            if (existingToolbar.dataset.jhsQuality === currentKey && !!existingToolbar._jhsFollow === inFancybox) return;
+            stopToolbarFollow(existingToolbar);
             existingToolbar.remove();
         }
-    
+
         // 清理其他容器上的旧工具条
         document.querySelectorAll('#video-bottom-toolbar').forEach(tb => {
-            if (!parent.contains(tb)) tb.remove();
+            if (!toolbarHost.contains(tb)) { stopToolbarFollow(tb); tb.remove(); }
         });
-    
-        // 🚀 检测视频是否在 Fancybox 弹窗内
-        const fancyboxContainer = videoEl.closest('.fancybox__container, .fancybox-container');
-        let toolbarParent = parent;
-        
-        // 如果视频在 Fancybox 内，将工具条放在 Fancybox 容器外（页面底部）
-        if (fancyboxContainer) {
-            toolbarParent = document.body;
-        }
-        
-        parent.style.position = 'relative';
+
+        if (!inFancybox) parent.style.position = 'relative';
         const toolbar = document.createElement('div');
         toolbar.id = 'video-bottom-toolbar';
         toolbar.dataset.jhsQuality = currentKey;
-        
-        // 🚀 根据是否在弹窗内调整样式
-        if (fancyboxContainer) {
-            // 弹窗外：使用固定定位，放在屏幕底部
-            toolbar.style.cssText = 'position:fixed;bottom:20px;left:50%;transform:translateX(-50%);display:flex;justify-content:center;width:auto;max-width:90vw;padding:10px 20px;background:rgba(0,0,0,0.8);border-radius:8px;z-index:99999999;';
+        toolbar._jhsFollow = inFancybox;
+        if (inFancybox) {
+            // 固定定位 + 逐帧跟随：紧贴视频下缘、水平居中；无额外底色（按钮自带深色底，与截图一致）
+            toolbar.style.cssText = 'position:fixed;z-index:100000000;display:flex;justify-content:center;transform:translateX(-50%);max-width:92vw;';
         } else {
-            // 非弹窗：保持原有样式
+            // 【修复】强制 100% 宽度并使用 justify-content: center 让内部元素居中
             toolbar.style.cssText = 'display:flex;justify-content:center;width:100%;margin-top:2px;';
         }
-        
         const group = document.createElement('div');
         // 【修复】按钮组内部也居中，并稍微加大按钮间距(gap:8px)使其更美观
         group.style.cssText = 'display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:center;';
-    
+
         QUALITY_OPTIONS.forEach(option => {
             const url = dmmVideoMap[option.quality];
             if (!url) return;
@@ -2742,7 +2763,10 @@
             group.appendChild(btn);
         });
         toolbar.appendChild(group);
-        toolbarParent.appendChild(toolbar);
+        toolbarHost.appendChild(toolbar);
+        if (inFancybox) {
+            startToolbarFollow(toolbar, () => (videoEl.isConnected ? videoEl : pickJhsLiveVideo()));
+        }
     
         // ===== 核心：画质切换点击处理（对齐 JHS handleVideo 内的切换逻辑） =====
         group.addEventListener('click', async (e) => {
