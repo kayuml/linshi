@@ -6344,6 +6344,7 @@
                 initRelatedEnhancement();
             }
             if (config.loadActressInfo) {
+                console.log("[JavDB增强] >>> 即将调用 loadActressInfo()");
                 loadActressInfo();
             }
             // 🚀 弹窗方式打开页面 + 悬浮大图
