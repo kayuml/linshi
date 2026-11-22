@@ -1112,6 +1112,17 @@
         html[data-theme="dark"] .javdb-wd-manager-panel { background: #1e1e1e; }
         html[data-theme="dark"] .javdb-wd-manager-panel .javdb-settings-header { border-bottom-color: #333; }
         html[data-theme="dark"] .javdb-wd-manager-panel h2 { color: #ddd; }
+
+        /* 女优信息样式 */
+        .jhs-actress-info { margin-top: 10px; padding: 10px; background: #f9f9f9; border-radius: 4px; }
+        .jhs-actress-info-row { display: flex; flex-wrap: wrap; gap: 15px; margin-bottom: 8px; }
+        .jhs-actress-info-item { font-size: 13px; color: #666; }
+        .jhs-actress-info-item strong { color: #333; }
+        .jhs-info-tag { background-color: #ecf5ff; display: inline-block; height: 28px; padding: 0 8px; line-height: 28px; font-size: 12px; color: #409eff; border: 1px solid #d9ecff; border-radius: 4px; box-sizing: border-box; white-space: nowrap; }
+        html[data-theme="dark"] .jhs-actress-info { background: #2a2a2a; }
+        html[data-theme="dark"] .jhs-actress-info-item { color: #aaa; }
+        html[data-theme="dark"] .jhs-actress-info-item strong { color: #ddd; }
+
     `);  
   
     // 创建设置面板
