@@ -523,51 +523,81 @@
         console.log("[JavDB增强] config.loadActressInfo:", config.loadActressInfo);
         console.log("[JavDB增强] 当前URL:", window.location.pathname);
         console.log("[JavDB增强] 是否已加载:", loadActressInfo._loaded);
-        if (!config.loadActressInfo) return;
-        if (!window.location.pathname.startsWith('/v/')) return;
-        if (loadActressInfo._loaded) return;
         
-        console.log("[JavDB增强] loadActressInfo 开始执行");
-        
-        // 尝试多种选择器找到演员名字
-        let nameList = [];
-        
-        // 选择器1: .actor-female
-        const actorFemale = document.querySelectorAll('.actor-female');
-        if (actorFemale.length > 0) {
-            nameList = Array.from(actorFemale).map(el => el.textContent.trim()).filter(n => n);
-            console.log("[JavDB增强] 使用 .actor-female 选择器，找到:", nameList);
+        if (!config.loadActressInfo) {
+            console.log("[JavDB增强] 功能未启用，退出");
+            return;
+        }
+        if (!window.location.pathname.startsWith('/v/')) {
+            console.log("[JavDB增强] 不是详情页，退出");
+            return;
+        }
+        if (loadActressInfo._loaded) {
+            console.log("[JavDB增强] 已经加载过，退出");
+            return;
         }
         
-        // 选择器2: span[onmouseover*="star_"] a
-        if (nameList.length === 0) {
-            const starLinks = document.querySelectorAll('span[onmouseover*="star_"] a');
-            if (starLinks.length > 0) {
-                nameList = Array.from(starLinks).map(el => el.textContent.trim()).filter(n => n);
-                console.log("[JavDB增强] 使用 span[onmouseover*="star_"] 选择器，找到:", nameList);
+        // 等待演员信息区域出现（最多等待10秒）
+        let retryCount = 0;
+        const maxRetries = 20;
+        const retryDelay = 500; // 500ms
+        
+        while (retryCount < maxRetries) {
+            console.log(`[JavDB增强] 第 ${retryCount + 1} 次尝试查找演员...`);
+            
+            // 尝试多种选择器找到演员名字
+            let nameList = [];
+            
+            // 选择器1: .actor-female
+            const actorFemale = document.querySelectorAll('.actor-female');
+            if (actorFemale.length > 0) {
+                nameList = Array.from(actorFemale).map(el => el.textContent.trim()).filter(n => n);
+                console.log("[JavDB增强] 使用 .actor-female 选择器，找到:", nameList);
             }
-        }
-        
-        // 选择器3: 查找包含"演員"标签附近的链接
-        if (nameList.length === 0) {
-            const allStrong = document.querySelectorAll('strong');
-            for (const strong of allStrong) {
-                if (strong.textContent.includes('演員') || strong.textContent.includes('演员')) {
-                    const parent = strong.closest('.panel-block') || strong.parentElement;
-                    if (parent) {
-                        const links = parent.querySelectorAll('a');
-                        if (links.length > 0) {
-                            nameList = Array.from(links).map(el => el.textContent.trim()).filter(n => n);
-                            console.log("[JavDB增强] 使用演员标签附近链接，找到:", nameList);
-                        }
-                    }
-                    break;
+            
+            // 选择器2: span[onmouseover*="star_"] a
+            if (nameList.length === 0) {
+                const starLinks = document.querySelectorAll('span[onmouseover*="star_"] a');
+                if (starLinks.length > 0) {
+                    nameList = Array.from(starLinks).map(el => el.textContent.trim()).filter(n => n);
+                    console.log("[JavDB增强] 使用 span[onmouseover*=\"star_\"] 选择器，找到:", nameList);
                 }
             }
+            
+            // 选择器3: 查找包含"演員"标签附近的链接
+            if (nameList.length === 0) {
+                const allStrong = document.querySelectorAll('strong');
+                for (const strong of allStrong) {
+                    if (strong.textContent.includes('演員') || strong.textContent.includes('演员')) {
+                        const parent = strong.closest('.panel-block') || strong.parentElement;
+                        if (parent) {
+                            const links = parent.querySelectorAll('a');
+                            if (links.length > 0) {
+                                nameList = Array.from(links).map(el => el.textContent.trim()).filter(n => n);
+                                console.log("[JavDB增强] 使用演员标签附近链接，找到:", nameList);
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+            
+            // 如果找到了演员，跳出循环
+            if (nameList.length > 0) {
+                console.log("[JavDB增强] 成功找到演员，开始加载信息");
+                break;
+            }
+            
+            // 如果还没找到，等待后重试
+            retryCount++;
+            if (retryCount < maxRetries) {
+                console.log(`[JavDB增强] 未找到演员，${retryDelay}ms 后重试...`);
+                await new Promise(resolve => setTimeout(resolve, retryDelay));
+            }
         }
         
         if (nameList.length === 0) {
-            console.log("[JavDB增强] 未找到任何演员，退出");
+            console.log("[JavDB增强] 重试次数已用完，仍未找到任何演员，退出");
             return;
         }
         
@@ -618,7 +648,6 @@
         // 插入到"演員"标签后
         if (infoHtml) {
             console.log("[JavDB增强] 准备插入女优信息HTML");
-            // 尝试多种插入方式
             let inserted = false;
             
             // 方式1: 找"演員"标签
