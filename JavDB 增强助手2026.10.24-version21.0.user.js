@@ -1,7 +1,7 @@
 // ==UserScript==  
 // @name         JavDB 增强助手
 // @namespace    
-// @version      2026.10.24-version21.0
+// @version      2026.10.24-version21.1
 // @description  JavDB 全站增强：① 深度汉化——繁简转换 + 内置谷歌翻译引擎（防缓存污染/并发限流/风控重试/残料二次翻译/季集转换），覆盖标题、资讯与关联列表；② 预览升级——DMM/FANZA 高画质预告片解析与一键画质切换、详情页长缩略图、封面就地播放、悬浮大图、大屏居中播放器；③ 浏览体验——自动关闭年龄验证、自动关闭应用推广横幅、会员封面修复、原标题显示、主题自适应复制按钮、分页优化与跳页、毛玻璃搜索栏、链接新窗口、弹窗打开详情、域名自动重写、503 自动重试；④ 数据管理——评论与磁链增强、相关清单绕过 VIP、已下载标记与管理、本地/WebDAV 备份，全功能可开关
 // @author       admin
 // @include      https://javdb*.com/*  
@@ -22,20 +22,11 @@
 // @connect      www.dmm.co.jp
 // @connect      cc3001.dmm.co.jp
 // @connect      special.dmm.co.jp
+// @connect      ja.wikipedia.org
 // @connect      *
 // @run-at       document-start  
 // @icon         
 // ==/UserScript==
-// ===== 脚本初始化确认 =====
-console.log("[JavDB增强] 脚本开始加载");
-window.addEventListener('error', function(e) {
-    console.error("[JavDB增强] 全局错误:", e.error);
-    alert("[JavDB增强] 脚本错误: " + e.error.message);
-});
-setTimeout(function() {
-    console.log("[JavDB增强] 脚本加载完成，config:", typeof config !== 'undefined' ? config : '未定义');
-}, 1000);
-// ===== 脚本初始化确认结束 =====
 
 
 (function() {
@@ -83,12 +74,10 @@ setTimeout(function() {
   
     // 加载配置
     function loadConfig() {
-    console.log("[JavDB增强] loadConfig 开始执行");
         const saved = GM_getValue('javdb_config', null);
         if (saved) {
             try {
                 config = Object.assign({}, DEFAULT_CONFIG, JSON.parse(saved));
-                console.log("[JavDB增强] 配置已加载，loadActressInfo =", config.loadActressInfo);
             } catch (e) {
                 console.error('加载配置失败:', e);
             }
@@ -602,12 +591,12 @@ setTimeout(function() {
                     <div class="panel-block actress-info">
                         <strong style="margin-right: 5px;"><span style="user-select: all">${name}</span>: </strong>
                         <a href="${info.url}" style="margin-left: 5px" target="_blank">
-                            ${info.birthday ? `<span class="info-tag">${info.birthday}</span>` : ''}
-                            ${info.age ? `<span class="info-tag">${info.age}</span>` : ''}
-                            ${info.height ? `<span class="info-tag">${info.height}</span>` : ''}
-                            ${info.weight ? `<span class="info-tag">${info.weight}</span>` : ''}
-                            ${info.threeSize ? `<span class="info-tag">${info.threeSize}</span>` : ''}
-                            ${info.braSize ? `<span class="info-tag">${info.braSize}</span>` : ''}
+                            ${info.birthday ? `<span class="jhs-info-tag">${info.birthday}</span>` : ''}
+                            ${info.age ? `<span class="jhs-info-tag">${info.age}</span>` : ''}
+                            ${info.height ? `<span class="jhs-info-tag">${info.height}</span>` : ''}
+                            ${info.weight ? `<span class="jhs-info-tag">${info.weight}</span>` : ''}
+                            ${info.threeSize ? `<span class="jhs-info-tag">${info.threeSize}</span>` : ''}
+                            ${info.braSize ? `<span class="jhs-info-tag">${info.braSize}</span>` : ''}
                         </a>
                     </div>
                 `;
@@ -633,34 +622,51 @@ setTimeout(function() {
     async function fetchActressInfo(name) {
         // 特殊名称处理
         if (name === '三上悠亞') name = '三上悠亜';
-        
+
         const url = JHS_ACTRESS_API_URL + encodeURIComponent(name);
-        const response = await fetch(url);
-        if (!response.ok) return null;
-        
-        const html = await response.text();
-        const parser = new DOMParser();
-        const doc = parser.parseFromString(html, 'text/html');
-        
-        const birthday = doc.querySelector('a[title="誕生日"]')?.closest('tr')?.querySelector('td')?.textContent?.trim() || '';
-        const ageText = doc.querySelector('th:has(+ td)')?.textContent?.includes('現年齢') 
-            ? doc.querySelector('th:has(+ td)')?.closest('tr')?.querySelector('td')?.textContent?.trim() 
-            : '';
-        const age = ageText ? ageText.replace(/[^\d]/g, '') + '岁' : '';
-        
-        const heightRow = Array.from(doc.querySelectorAll('tr')).find(r => r.querySelector('a[title="身長"]'));
-        const height = heightRow ? heightRow.querySelector('td')?.textContent?.trim()?.split(' ')[0] + 'cm' : '';
-        
-        const weightRow = Array.from(doc.querySelectorAll('tr')).find(r => r.querySelector('a[title="体重"]'));
-        let weight = weightRow ? weightRow.querySelector('td')?.textContent?.trim()?.split('/')?.[1]?.trim() : '';
-        if (weight === '― kg') weight = '';
-        
-        const threeSizeRow = Array.from(doc.querySelectorAll('tr')).find(r => r.querySelector('a[title="スリーサイズ"]'));
-        const threeSize = threeSizeRow ? threeSizeRow.querySelector('td')?.textContent?.trim() : '';
-        
-        const braSizeRow = Array.from(doc.querySelectorAll('tr')).find(r => r.textContent.includes('ブラサイズ'));
-        const braSize = braSizeRow ? braSizeRow.querySelector('td')?.textContent?.trim() : '';
-        
+        // 必须走 GM_xmlhttpRequest（gmHttpGet）绕过浏览器 CORS 限制；
+        // 页面环境的 fetch 跨域抓取维基百科会被拦截，导致信息永远加载不出来
+        const html = await gmHttpGet(url);
+        const doc = new DOMParser().parseFromString(html, 'text/html');
+
+        // 信息表行定位辅助：按 th 内链接 title / th 文本关键词找到对应 tr
+        const rowByTitle = title => {
+            const a = doc.querySelector(`a[title="${title}"]`);
+            return a ? a.closest('tr') : null;
+        };
+        const rowByTh = keyword => Array.from(doc.querySelectorAll('tr')).find(r => {
+            const th = r.querySelector('th');
+            return th && th.textContent.includes(keyword);
+        });
+        const cellText = row => {
+            const td = row ? row.querySelector('td') : null;
+            return td ? td.textContent.trim() : '';
+        };
+
+        // 生日
+        const birthday = cellText(rowByTitle('誕生日'));
+
+        // 年龄（现年齢）
+        const ageNum = parseInt(cellText(rowByTh('現年齢')), 10);
+        const age = Number.isFinite(ageNum) ? ageNum + '岁' : '';
+
+        // 身高
+        const heightText = cellText(rowByTitle('身長'));
+        const height = heightText ? heightText.split(' ')[0] + 'cm' : '';
+
+        // 体重（形如 "45 kg / ― kg"，取斜杠后的当前体重；未知则留空）
+        const weightText = cellText(rowByTitle('体重'));
+        let weight = weightText.includes('/') ? weightText.split('/')[1].trim() : weightText;
+        if (!weight || weight.startsWith('―')) weight = '';
+
+        // 三围
+        const threeSize = cellText(rowByTitle('スリーサイズ'));
+
+        // 罩杯（只取 td 的第一个文本节点，避免把引用角标带进来）
+        const braRow = rowByTh('ブラサイズ');
+        const braTd = braRow ? braRow.querySelector('td') : null;
+        const braSize = braTd && braTd.firstChild ? braTd.firstChild.textContent.trim() : '';
+
         return { birthday, age, height, weight, threeSize, braSize, url };
     }
 
@@ -1170,6 +1176,7 @@ setTimeout(function() {
         .jhs-actress-info-item { font-size: 13px; color: #666; }
         .jhs-actress-info-item strong { color: #333; }
         .jhs-info-tag { background-color: #ecf5ff; display: inline-block; height: 28px; padding: 0 8px; line-height: 28px; font-size: 12px; color: #409eff; border: 1px solid #d9ecff; border-radius: 4px; box-sizing: border-box; white-space: nowrap; }
+        .actress-info .jhs-info-tag { margin: 2px 4px 2px 0; }
         html[data-theme="dark"] .jhs-actress-info { background: #2a2a2a; }
         html[data-theme="dark"] .jhs-actress-info-item { color: #aaa; }
         html[data-theme="dark"] .jhs-actress-info-item strong { color: #ddd; }
@@ -6291,18 +6298,8 @@ setTimeout(function() {
                 initRelatedEnhancement();
             }
             if (config.loadActressInfo) {
-                console.log("[JavDB增强] >>> 即将调用 loadActressInfo()");
-                try {
-            console.log("[JavDB增强] 开始调用 loadActressInfo");
-            console.log("[JavDB增强] typeof loadActressInfo:", typeof loadActressInfo);
-            console.log("[JavDB增强] 准备调用 loadActressInfo");
-            alert("[JavDB增强] 即将调用女优信息加载函数\n\nconfig.loadActressInfo = " + config.loadActressInfo + "\n当前URL = " + window.location.pathname);
-            await loadActressInfo();
-            console.log("[JavDB增强] loadActressInfo 调用完成");
-        } catch (e) {
-            console.error("[JavDB增强] loadActressInfo 执行出错:", e);
-            console.error("[JavDB增强] 错误堆栈:", e.stack);
-        }
+                // 异步执行，不阻塞后续初始化；init 不是 async 函数，不能直接 await
+                loadActressInfo().catch(e => console.error("[JavDB增强] 女优信息加载出错:", e));
             }
             // 🚀 弹窗方式打开页面 + 悬浮大图
             setupDialogOpenDetail();
