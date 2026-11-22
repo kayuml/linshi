@@ -519,18 +519,53 @@
     const JHS_ACTRESS_API_URL = "https://ja.wikipedia.org/wiki/";
     
     async function loadActressInfo() {
-        console.log("[JavDB增强] loadActressInfo 开始执行");
         if (!config.loadActressInfo) return;
         if (!window.location.pathname.startsWith('/v/')) return;
         if (loadActressInfo._loaded) return;
         
-        // 同步 JAV-JHS: 使用 .actor-female 或 span[onmouseover*="star_"] a 选择器
-        let nameList = Array.from(document.querySelectorAll('.actor-female')).map(el => el.textContent.trim());
-        if (!nameList.length) {
-            nameList = Array.from(document.querySelectorAll('span[onmouseover*="star_"] a')).map(el => el.textContent.trim());
-        console.log("[JavDB增强] 找到的演员列表:", nameList);
+        console.log("[JavDB增强] loadActressInfo 开始执行");
+        
+        // 尝试多种选择器找到演员名字
+        let nameList = [];
+        
+        // 选择器1: .actor-female
+        const actorFemale = document.querySelectorAll('.actor-female');
+        if (actorFemale.length > 0) {
+            nameList = Array.from(actorFemale).map(el => el.textContent.trim()).filter(n => n);
+            console.log("[JavDB增强] 使用 .actor-female 选择器，找到:", nameList);
         }
-        if (!nameList.length) return;
+        
+        // 选择器2: span[onmouseover*="star_"] a
+        if (nameList.length === 0) {
+            const starLinks = document.querySelectorAll('span[onmouseover*="star_"] a');
+            if (starLinks.length > 0) {
+                nameList = Array.from(starLinks).map(el => el.textContent.trim()).filter(n => n);
+                console.log("[JavDB增强] 使用 span[onmouseover*="star_"] 选择器，找到:", nameList);
+            }
+        }
+        
+        // 选择器3: 查找包含"演員"标签附近的链接
+        if (nameList.length === 0) {
+            const allStrong = document.querySelectorAll('strong');
+            for (const strong of allStrong) {
+                if (strong.textContent.includes('演員') || strong.textContent.includes('演员')) {
+                    const parent = strong.closest('.panel-block') || strong.parentElement;
+                    if (parent) {
+                        const links = parent.querySelectorAll('a');
+                        if (links.length > 0) {
+                            nameList = Array.from(links).map(el => el.textContent.trim()).filter(n => n);
+                            console.log("[JavDB增强] 使用演员标签附近链接，找到:", nameList);
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+        
+        if (nameList.length === 0) {
+            console.log("[JavDB增强] 未找到任何演员，退出");
+            return;
+        }
         
         loadActressInfo._loaded = true;
         
@@ -546,11 +581,15 @@
             const name = nameList[i];
             if (!name) continue;
             
+            console.log(`[JavDB增强] 正在获取 ${name} 的信息...`);
             let info = cacheData[name];
             if (!info) {
                 try {
                     info = await fetchActressInfo(name);
-                    if (info) cacheData[name] = info;
+                    if (info) {
+                        cacheData[name] = info;
+                        console.log(`[JavDB增强] ${name} 信息获取成功:`, info);
+                    }
                 } catch (e) {
                     console.warn(`[JavDB增强] 获取女优信息失败: ${name}`, e);
                 }
@@ -561,9 +600,9 @@
                     <div class="panel-block actress-info">
                         <strong style="margin-right: 5px;"><span style="user-select: all">${name}</span>: </strong>
                         <a href="${info.url}" style="margin-left: 5px" target="_blank">
-                            <span class="info-tag">${info.birthday} ${info.age}</span>
-                            <span class="info-tag">${info.height} ${info.weight}</span>
-                            <span class="info-tag">${info.threeSize} ${info.braSize}</span>
+                            <span class="info-tag">${info.birthday || ''} ${info.age || ''}</span>
+                            <span class="info-tag">${info.height || ''} ${info.weight || ''}</span>
+                            <span class="info-tag">${info.threeSize || ''} ${info.braSize || ''}</span>
                         </a>
                     </div>
                 `;
@@ -572,15 +611,43 @@
             }
         }
         
-        // 同步 JAV-JHS: 在"演員"标签后插入
+        // 插入到"演員"标签后
         if (infoHtml) {
-            const actorLabel = Array.from(document.querySelectorAll('strong')).find(el => el.textContent.includes('演員'));
-            if (actorLabel && actorLabel.parentElement) {
-                actorLabel.parentElement.insertAdjacentHTML('afterend', infoHtml);
+            console.log("[JavDB增强] 准备插入女优信息HTML");
+            // 尝试多种插入方式
+            let inserted = false;
+            
+            // 方式1: 找"演員"标签
+            const allStrong = document.querySelectorAll('strong');
+            for (const strong of allStrong) {
+                if (strong.textContent.includes('演員') || strong.textContent.includes('演员')) {
+                    const parent = strong.closest('.panel-block') || strong.parentElement;
+                    if (parent) {
+                        parent.insertAdjacentHTML('afterend', infoHtml);
+                        console.log("[JavDB增强] 成功在演员标签后插入");
+                        inserted = true;
+                        break;
+                    }
+                }
+            }
+            
+            // 方式2: 如果没找到，尝试在第一个演员链接后插入
+            if (!inserted) {
+                const firstActor = document.querySelector('.actor-female, span[onmouseover*="star_"] a');
+                if (firstActor && firstActor.parentElement) {
+                    firstActor.parentElement.insertAdjacentHTML('afterend', infoHtml);
+                    console.log("[JavDB增强] 在第一个演员链接后插入");
+                    inserted = true;
+                }
+            }
+            
+            if (!inserted) {
+                console.warn("[JavDB增强] 无法找到合适的插入位置");
             }
         }
         
         localStorage.setItem(cacheKey, JSON.stringify(cacheData));
+        console.log("[JavDB增强] loadActressInfo 执行完成");
     }
     
     async function fetchActressInfo(name) {
