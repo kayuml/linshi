@@ -2703,12 +2703,29 @@
             if (!parent.contains(tb)) tb.remove();
         });
     
+        // 🚀 检测视频是否在 Fancybox 弹窗内
+        const fancyboxContainer = videoEl.closest('.fancybox__container, .fancybox-container');
+        let toolbarParent = parent;
+        
+        // 如果视频在 Fancybox 内，将工具条放在 Fancybox 容器外（页面底部）
+        if (fancyboxContainer) {
+            toolbarParent = document.body;
+        }
+        
         parent.style.position = 'relative';
         const toolbar = document.createElement('div');
         toolbar.id = 'video-bottom-toolbar';
         toolbar.dataset.jhsQuality = currentKey;
-        // 【修复】强制 100% 宽度并使用 justify-content: center 让内部元素居中
-        toolbar.style.cssText = 'display:flex;justify-content:center;width:100%;margin-top:2px;';
+        
+        // 🚀 根据是否在弹窗内调整样式
+        if (fancyboxContainer) {
+            // 弹窗外：使用固定定位，放在屏幕底部
+            toolbar.style.cssText = 'position:fixed;bottom:20px;left:50%;transform:translateX(-50%);display:flex;justify-content:center;width:auto;max-width:90vw;padding:10px 20px;background:rgba(0,0,0,0.8);border-radius:8px;z-index:99999999;';
+        } else {
+            // 非弹窗：保持原有样式
+            toolbar.style.cssText = 'display:flex;justify-content:center;width:100%;margin-top:2px;';
+        }
+        
         const group = document.createElement('div');
         // 【修复】按钮组内部也居中，并稍微加大按钮间距(gap:8px)使其更美观
         group.style.cssText = 'display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:center;';
@@ -2725,7 +2742,7 @@
             group.appendChild(btn);
         });
         toolbar.appendChild(group);
-        parent.appendChild(toolbar);
+        toolbarParent.appendChild(toolbar);
     
         // ===== 核心：画质切换点击处理（对齐 JHS handleVideo 内的切换逻辑） =====
         group.addEventListener('click', async (e) => {
