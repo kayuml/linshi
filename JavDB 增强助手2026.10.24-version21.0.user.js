@@ -6239,6 +6239,9 @@
             if (config.loadRelated) {
                 initRelatedEnhancement();
             }
+            if (config.loadActressInfo) {
+                loadActressInfo();
+            }
             // 🚀 弹窗方式打开页面 + 悬浮大图
             setupDialogOpenDetail();
             initHoverBigImg();
