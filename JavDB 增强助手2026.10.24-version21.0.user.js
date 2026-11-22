@@ -519,6 +519,10 @@
     const JHS_ACTRESS_API_URL = "https://ja.wikipedia.org/wiki/";
     
     async function loadActressInfo() {
+        console.log("[JavDB增强] ========== loadActressInfo 调用 ==========");
+        console.log("[JavDB增强] config.loadActressInfo:", config.loadActressInfo);
+        console.log("[JavDB增强] 当前URL:", window.location.pathname);
+        console.log("[JavDB增强] 是否已加载:", loadActressInfo._loaded);
         if (!config.loadActressInfo) return;
         if (!window.location.pathname.startsWith('/v/')) return;
         if (loadActressInfo._loaded) return;
