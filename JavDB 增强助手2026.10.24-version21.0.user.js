@@ -2,7 +2,7 @@
 // @name         JavDB 增强助手
 // @namespace    
 // @version      2026.10.24-version21.0
-// @description  JavDB 全站增强：① 深度汉化——繁简转换 + 内置谷歌翻译引擎（防缓存污染/并发限流/风控重试/残料二次翻译/季集转换），覆盖标题、资讯与关联列表；② 预览升级——DMM/FANZA 高画质预告片解析与一键画质切换、详情页长缩略图、封面就地播放、悬浮大图、大屏居中播放器；③ 浏览体验——自动年龄验证、会员封面修复、原标题显示、主题自适应复制按钮、分页优化与跳页、毛玻璃搜索栏、链接新窗口、弹窗打开详情、域名自动重写、503 自动重试；④ 数据管理——评论与磁链增强、相关清单绕过 VIP、已下载标记与管理、本地/WebDAV 备份，全功能可开关
+// @description  JavDB 全站增强：① 深度汉化——繁简转换 + 内置谷歌翻译引擎（防缓存污染/并发限流/风控重试/残料二次翻译/季集转换），覆盖标题、资讯与关联列表；② 预览升级——DMM/FANZA 高画质预告片解析与一键画质切换、详情页长缩略图、封面就地播放、悬浮大图、大屏居中播放器；③ 浏览体验——自动年龄验证、自动关闭应用推广横幅、会员封面修复、原标题显示、主题自适应复制按钮、分页优化与跳页、毛玻璃搜索栏、链接新窗口、弹窗打开详情、域名自动重写、503 自动重试；④ 数据管理——评论与磁链增强、相关清单绕过 VIP、已下载标记与管理、本地/WebDAV 备份，全功能可开关
 // @author       admin
 // @include      https://javdb*.com/*  
 // @grant        GM_addStyle
@@ -29,11 +29,11 @@
 (function() {
     'use strict';
     // ==================== 配置管理 ====================
-    // 用户脚本的默认配置，默认只开启汉化、自动点击年龄验证、隐藏应用推广横幅、显示重试按钮和分页样式优化
+    // 用户脚本的默认配置，默认只开启汉化、自动点击年龄验证、自动点击关闭应用推广横幅、显示重试按钮和分页样式优化
     const DEFAULT_CONFIG = {
         translation: true,           // 简体中文翻译（默认开启）
         autoClickAge: true,          // 自动点击年龄验证（默认开启）
-        hideBanner: true,            // 隐藏应用推广横幅（默认开启）
+        hideBanner: true,            // 自动点击关闭应用推广横幅（默认开启，键名沿用 hideBanner 以兼容旧配置）
         hideVipItems: false,         // 隐藏会员专属菜单
         hideFooter: false,           // 隐藏页脚导航
         hideFloatButtons: false,     // 隐藏悬浮按钮
@@ -50,7 +50,8 @@
         paginationJump: true,        // 分页样式优化并添加跳转到指定页码（默认开启）
         beautifySearchBar: true,     // 搜索栏美化（默认开启）
         openNewTab: true,            // 全局链接新窗口打开（默认开启）
-        linkRewrite: false,          // 链接重写到最新域名
+        linkRewrite: false,          // 链接重写到最新域名（目标域名从顶部域名栏自动获取，不再硬编码）
+        customRewriteDomain: '',     // 自定义重写域名（优先级高于自动获取的域名，留空则用自动获取）
         retryButton: true,           // 显示重新翻译按钮（默认开启）
         autoReload503: true,         // 503错误页自动重载（默认开启）
         downloadMark: true,          // 已下载标记（默认开启）
@@ -76,6 +77,8 @@
                 console.error('加载配置失败:', e);
             }
         }
+        // 读取持久化的"域名栏自动获取的最新域名"（跨页面共享，供链接重写与设置展示）
+        try { detectedLatestDomain = GM_getValue(DETECTED_DOMAIN_KEY, '') || ''; } catch (e) {}
     }  
   
     // 保存配置
@@ -84,20 +87,82 @@
     }  
   
     // ==================== 链接重写功能 ====================
-    // 在 javdb.com 域名下，将所有指向 javdb.com 的链接替换为脚本中内置的另一个域名
+    // 目标域名不再硬编码：优先使用用户在设置中填写的自定义域名，
+    // 其次使用从网站顶部域名栏(nav.sub-header)自动获取的最新域名（GM 存储持久化，跨页面共享）
+    const DETECTED_DOMAIN_KEY = 'javdb_detected_domain';
+    let detectedLatestDomain = '';
+
+    // 规范化域名输入：去掉协议/路径/端口，只保留合法主机名（非法返回空串）
+    function normalizeDomainInput(raw) {
+        if (!raw) return '';
+        let s = String(raw).trim().toLowerCase();
+        s = s.replace(/^[a-z][a-z0-9+.-]*:\/\//, '').replace(/[\/?#].*$/, '').replace(/:\d+$/, '');
+        return /^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(s) ? s : '';
+    }
+
+    // 从顶部域名栏解析最新域名。实际结构形如：
+    // 🔥 官方App: app.javdb581.com / app.javdb582.com, 最新域名: javdb581.com / javdb582.com, 永久域名: javdb.com, ...
+    function parseLatestDomainFromBar(bar) {
+        if (!bar) return '';
+        // 优先从链接 href 中提取带编号的最新域名（天然排除 app.* 子域名与永久域名 javdb.com）
+        for (const a of bar.querySelectorAll('a[href]')) {
+            try {
+                const host = new URL(a.href, location.href).hostname.toLowerCase();
+                if (/^javdb\d+\.[a-z0-9.-]+$/.test(host)) return host;
+            } catch (e) {}
+        }
+        // 兜底：从"最新域名/最新網址"标签之后的文本里提取第一个 javdb 域名
+        const seg = (bar.textContent || '').split(/最新(?:域名|網址|网址)[:：]?/)[1];
+        if (seg) {
+            const m = seg.match(/javdb\d*\.[a-z]{2,}(?:\.[a-z]{2,})?/i);
+            if (m) return m[0].toLowerCase();
+        }
+        return '';
+    }
+
+    // 检测并持久化最新域名（无论重写开关是否开启都运行，供设置面板展示）
+    function detectLatestDomain() {
+        let domain = parseLatestDomainFromBar(document.querySelector('nav.sub-header'));
+        // 兜底：网站在 body[data-domain] 上也声明了当前最新域名（域名栏被隐藏/移除时可用）
+        if (!domain && document.body) {
+            const bodyDomain = normalizeDomainInput(document.body.getAttribute('data-domain'));
+            if (bodyDomain && bodyDomain !== 'javdb.com' && !bodyDomain.endsWith('.javdb.com')) {
+                domain = bodyDomain;
+            }
+        }
+        if (domain && domain !== detectedLatestDomain) {
+            detectedLatestDomain = domain;
+            try { GM_setValue(DETECTED_DOMAIN_KEY, domain); } catch (e) {}
+            // 设置面板开着时实时刷新展示
+            const view = document.getElementById('javdb-detected-domain');
+            if (view) view.textContent = domain;
+        }
+        return detectedLatestDomain;
+    }
+
+    // 重写目标域名：用户自定义 > 域名栏自动获取
+    function getRewriteTargetDomain() {
+        const custom = normalizeDomainInput(config.customRewriteDomain);
+        if (custom) return custom;
+        return detectLatestDomain();
+    }
+
+    // 在 javdb.com 域名下，将所有指向 javdb.com 的链接替换为最新可用域名
     function rewriteLinksToTempDomain() {
         if (!config.linkRewrite) return;
-        
+
         const permanentHost = 'javdb.com';
-        const tempHost = 'javdb575.com'; // 内置临时域名
-        
+
         // 如果当前域名不是永久域名，则不执行重写
         if (location.hostname !== permanentHost && !location.hostname.endsWith('.' + permanentHost)) {
             return;
         }
-        
-        // 替换链接的主函数
+
+        // 替换链接的主函数（目标域名每次动态获取，域名栏加载完成后即可生效）
         const replaceLinks = () => {
+            const tempHost = getRewriteTargetDomain();
+            // 尚未获取到可用域名、或目标就是永久域名自身时不重写
+            if (!tempHost || tempHost === permanentHost || tempHost.endsWith('.' + permanentHost)) return;
             document.querySelectorAll('a[href]').forEach(a => {
                 try {
                     const url = new URL(a.href);
@@ -105,7 +170,7 @@
                     if (url.hostname === permanentHost || url.hostname.endsWith('.' + permanentHost)) {
                         url.hostname = tempHost;
                         a.href = url.toString();
-                        
+
                         // 同时处理data-href属性（如果有）
                         if (a.hasAttribute('data-href')) {
                             const dataHref = a.getAttribute('data-href');
@@ -124,7 +189,7 @@
                     // 忽略无法解析的URL
                 }
             });
-            
+
             // 同时处理表单的action属性
             document.querySelectorAll('form[action]').forEach(form => {
                 try {
@@ -138,11 +203,13 @@
                 }
             });
         };
-        
+
         // 初次替换
         replaceLinks();
-        
-        // 监听动态内容变化
+
+        // 监听动态内容变化（幂等，避免重复注册观察者）
+        if (rewriteLinksToTempDomain._bound) return;
+        rewriteLinksToTempDomain._bound = true;
         const observer = new MutationObserver((mutations) => {
             let shouldReplace = false;
             for (const mutation of mutations) {
@@ -155,7 +222,7 @@
                 setTimeout(replaceLinks, 100); // 延迟执行确保新元素已完全加载
             }
         });
-        
+
         observer.observe(document.documentElement, {
             childList: true,
             subtree: true
@@ -899,6 +966,18 @@
         html[data-theme="dark"] .javdb-setting-item.is-disabled .javdb-setting-desc {
             color: #555 !important;
         }
+
+        /* 链接域名重写：当前获取域名展示框 + 自定义域名输入框 */
+        .javdb-detected-domain {
+            margin-top: 6px; padding: 8px 12px; border: 1px dashed #bbb; border-radius: 6px;
+            font-size: 14px; font-family: Consolas, Menlo, monospace; word-break: break-all; color: #333;
+        }
+        html[data-theme="dark"] .javdb-detected-domain { background: #2a2a2a; border-color: #555; color: #ddd; }
+        .javdb-domain-input {
+            width: 100%; margin-top: 6px; box-sizing: border-box; padding: 8px 12px;
+            border: 1px solid #ddd; border-radius: 6px; font-size: 14px; outline: none;
+        }
+        html[data-theme="dark"] .javdb-domain-input { background: #2a2a2a; border-color: #444; color: #ddd; }
         
         /* 云备份管理弹窗样式 */
         .javdb-wd-manager-panel {
@@ -928,7 +1007,7 @@
         const settingsConfig = [    
             { key: 'translation', label: '简体中文翻译', desc: '将繁体中文转换为简体中文' },    
             { key: 'autoClickAge', label: '自动点击年龄验证', desc: '自动点击"是,我已满18岁"按钮' },    
-            { key: 'hideBanner', label: '隐藏应用推广横幅', desc: '隐藏顶部APP下载推广' },    
+            { key: 'hideBanner', label: '自动点击关闭应用推广横幅', desc: '自动点击底部APP下载推广横幅的关闭按钮' },    
             { key: 'hideVipItems', label: '隐藏会员专属控件', desc: '隐藏‘更多短评需VIP或App查看’提示、原生相关清单、可播放、中字可播放等VIP控件' },
             { key: 'hideFooter', label: '隐藏页脚导航栏', desc: '隐藏底部导航栏' },    
             { key: 'hideFloatButtons', label: '隐藏悬浮按钮', desc: '隐藏右下角磁链下载、TOP按钮' },
@@ -945,7 +1024,7 @@
             { key: 'paginationJump', label: '分页样式优化', desc: '为分页样式优化并添加跳转到指定页码功能' },    
             { key: 'beautifySearchBar', label: '搜索栏美化', desc: '毛玻璃质感搜索栏，独立圆角与主题自适应' },
             { key: 'openNewTab', label: '新窗口打开链接', desc: '影片/演员等链接及"搜索"在新窗口打开；底部分页保持当前页跳转，防标签页爆炸' },
-            { key: 'linkRewrite', label: '链接域名重写', desc: '自动重写为最新可用域名' },    
+            { key: 'linkRewrite', label: '链接域名重写', desc: '在 javdb.com 页面将链接重写为顶部域名栏获取的最新域名（可在下方"链接域名重写"区块自定义，自定义优先）' },    
             { key: 'retryButton', label: '显示重试按钮', desc: '显示手动重新翻译按钮（依赖「简体中文翻译」开关）' },
             { key: 'autoReload503', label: '503自动重载', desc: '检测到"503 Service Temporarily Unavailable"错误页时自动重载重试（限次防死循环）' },
             { key: 'downloadMark', label: '已下载标记', desc: '列表页封面添加✓标记按钮，并提供已下载列表（查看/添加/编辑/删除）' },
@@ -963,6 +1042,10 @@
         const videoQualityOptionsHtml = QUALITY_OPTIONS.filter(q => q.canSelect).map(q =>
             `<option value="${q.quality}" ${config.videoQuality === q.quality ? 'selected' : ''}>${q.text}</option>`).join('');
         const showVideoQualitySection = true;
+
+        // 🔗 链接域名重写：展示当前自动获取到的最新域名 + 自定义域名（优先级更高）
+        const detectedDomainText = detectedLatestDomain || '暂未获取到（打开任意页面后自动从顶部域名栏获取）';
+        const customDomainValue = String(config.customRewriteDomain || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
 
         panel.innerHTML = `
             <div class="javdb-settings-header">
@@ -996,6 +1079,18 @@
                     </select>
                 </div>
             </div>` : ''}
+            <div class="javdb-settings-section">
+                <h3>🔗 链接域名重写</h3>
+                <div class="javdb-setting-item" style="margin-bottom: 0;">
+                    <div class="javdb-setting-head">
+                        <span class="javdb-setting-label">当前获取到的域名</span>
+                    </div>
+                    <div class="javdb-setting-desc">自动从网站顶部域名栏(nav.sub-header)获取的最新域名</div>
+                    <div id="javdb-detected-domain" class="javdb-detected-domain">${detectedDomainText}</div>
+                    <div class="javdb-setting-desc" style="margin-top: 10px;">自定义域名（优先级高于自动获取的域名，留空则使用自动获取）</div>
+                    <input type="text" id="javdb-custom-domain" class="javdb-domain-input" placeholder="如 javdb581.com，留空使用自动获取的域名" value="${customDomainValue}">
+                </div>
+            </div>
             <div class="javdb-settings-section">
                 <h3>💾 数据备份与恢复</h3>
                 <p>包含：功能开关设置、已下载标记列表（含链接/系列）</p>
@@ -1084,6 +1179,17 @@
             // 读取预览视频默认画质偏好（区块渲染时该下拉框一定存在，做 null 防御）
             const vqSel = panel.querySelector('#javdb-video-quality');
             if (vqSel && vqSel.value) config.videoQuality = vqSel.value;
+            // 读取自定义重写域名（优先级高于域名栏自动获取；留空则使用自动获取）
+            const domainInput = panel.querySelector('#javdb-custom-domain');
+            if (domainInput) {
+                const rawDomain = domainInput.value.trim();
+                const normalizedDomain = normalizeDomainInput(rawDomain);
+                if (rawDomain && !normalizedDomain) {
+                    alert('自定义域名格式不正确，请填写形如 javdb581.com 的域名（无需 http:// 前缀或路径）');
+                    return;
+                }
+                config.customRewriteDomain = normalizedDomain;
+            }
             saveConfig();    
             alert('设置已保存！页面将刷新以应用新设置。');    
             location.reload();    
@@ -2687,7 +2793,7 @@
     const COVER_VIDEO_SVG = '<svg t="1749003664455" class="jhs-icon icon" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg" width="200" height="200"><path d="M825.6 153.6H198.4C124.5 153.6 64 214.1 64 288v448c0 73.9 60.5 134.4 134.4 134.4h627.2c73.9 0 134.4-60.5 134.4-134.4V288c0-73.9-60.5-134.4-134.4-134.4z m-138.2 44.8l112 112H706l-112-112h93.4z m-156.8 0l112 112H526.7l-112-112h115.9z m-179.2 0l112 112H347.5l-112-112h115.9zM108.8 288c0-41.4 28.4-76.1 66.7-86.3l108.7 108.7H108.8V288z m806.4 448c0 49.4-40.2 89.6-89.6 89.6H198.4c-49.4 0-89.6-40.2-89.6-89.6V355.2h806.4V736z m0-425.6h-52.5l-112-112h74.9c49.4 0 89.6 40.2 89.6 89.6v22.4z"></path><path d="M454 687.2l149.3-77.6c27.5-13.8 27.5-53 0-66.8L468 472.2c-31.2-15.6-68 7.1-68 42v139.6c0 27.8 29.2 45.8 54 33.4zM444.8 512l134.4 67.2-134.4 67.2V512z"></path></svg>';
     const COVER_RECOVERY_VIDEO_SVG = '<svg class="jhs-icon icon" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg" width="200" height="200"><path d="M938.666667 553.92V768c0 64.8-52.533333 117.333333-117.333334 117.333333H202.666667c-64.8 0-117.333333-52.533333-117.333334-117.333333V256c0-64.8 52.533333-117.333333 117.333334-117.333333h618.666666c64.8 0 117.333333 52.533333 117.333334 117.333333v297.92z m-64-74.624V256a53.333333 53.333333 0 0 0-53.333334-53.333333H202.666667a53.333333 53.333333 0 0 0-53.333334 53.333333v344.48A290.090667 290.090667 0 0 1 192 597.333333a286.88 286.88 0 0 1 183.296 65.845334C427.029333 528.384 556.906667 437.333333 704 437.333333c65.706667 0 126.997333 16.778667 170.666667 41.962667z m0 82.24c-5.333333-8.32-21.130667-21.653333-43.648-32.917333C796.768 511.488 753.045333 501.333333 704 501.333333c-121.770667 0-229.130667 76.266667-270.432 188.693334-2.730667 7.445333-7.402667 20.32-13.994667 38.581333-7.68 21.301333-34.453333 28.106667-51.370666 13.056-16.437333-14.634667-28.554667-25.066667-36.138667-31.146667A222.890667 222.890667 0 0 0 192 661.333333c-14.464 0-28.725333 1.365333-42.666667 4.053334V768a53.333333 53.333333 0 0 0 53.333334 53.333333h618.666666a53.333333 53.333333 0 0 0 53.333334-53.333333V561.525333zM320 480a96 96 0 1 1 0-192 96 96 0 0 1 0 192z m0-64a32 32 0 1 0 0-64 32 32 0 0 0 0 64z" fill="#000000"></path></svg>';
 
-    // 列表页每个 item 的 tags 行尾部追加 tool-box（📏长缩略图 + ▶预览视频），受各自开关控制
+    // 列表页每个 item 的 tags 行尾部追加 tool-box（📏长缩略图 + ▶预览视频），受各自开关控制；无 .tags 行的卡片（如"每周推荐"）自动补一行工具栏
     // 样式对齐 CoverButtonPlugin：.tool-box span 默认 opacity .3，悬停变 1；SVG 路径蓝色/暗色白色
     function addCoverQuickButtons() {
         if (!config.enableScreenSvg && !config.enableVideoSvg) return;
@@ -2697,8 +2803,17 @@
         injectCoverButtonStyles();
         document.querySelectorAll('.movie-list .item').forEach(item => {
             if (item.querySelector('.jhs-tool-box')) return; // 幂等
-            const tagsRow = item.querySelector('.tags');
-            if (!tagsRow) return;
+            let tagsRow = item.querySelector('.tags');
+            // 🚀 适配"每周推荐"(#recommend-container)等无 .tags 行的卡片：
+            // 其结构为 a > (.cover + .video-title + .score)，在链接末尾补一行右对齐工具栏
+            if (!tagsRow) {
+                if (!extractItemCode(item)) return; // 无番号的卡片（演员/片商等）不加空工具栏
+                const host = item.querySelector('a.box') || item.querySelector('a[href*="/v/"]') || item;
+                tagsRow = document.createElement('div');
+                tagsRow.className = 'jhs-tags-fallback';
+                tagsRow.style.cssText = 'display:flex;align-items:center;justify-content:flex-end;';
+                host.appendChild(tagsRow);
+            }
             const toolBox = document.createElement('div');
             toolBox.className = 'tool-box jhs-tool-box';
             toolBox.style.cssText = 'margin-left:auto;display:flex;align-items:center;';
@@ -3255,9 +3370,9 @@
             `;
         }
   
-        // 立即通过 CSS 隐藏应用推广横幅（彻底隐藏），防止刷新时短暂显示    
+        // 立即通过 CSS 隐藏应用推广横幅（彻底隐藏），防止刷新时短暂显示；同时自动点击其关闭按钮，让网站写入 30 天免打扰 cookie(hide_app_banner_v2)    
         if (config.hideBanner) {    
-            styles += "nav.app-desktop-banner { display: none !important; }";    
+            styles += "aside.app-banner, nav.app-desktop-banner { display: none !important; }";    
         }
 
         // 立即通过 CSS 隐藏年龄验证弹窗（透明化、禁止用户交互），防止新开标签页时短暂显示    
@@ -3770,6 +3885,35 @@
                 clearInterval(interval);
             }
         }, 10); // 每 10 毫秒检查一次
+    }
+
+    // 使用 setInterval 高频检查并极速自动点击底部APP下载推广横幅的关闭按钮（对齐自动点击年龄验证的实现）
+    // 网站控制器(app-banner#close)点击后写入 hide_app_banner_v2 cookie(30天)并隐藏横幅；
+    // 若点击时 Stimulus 控制器尚未接管则点击无效，故持续补点，直到 cookie 写入或超时
+    function autoClickAppBannerCloseFast() {
+        if (!config.hideBanner) return;
+        if (autoClickAppBannerCloseFast._timer) return;
+        const started = Date.now();
+        let lastClick = 0;
+        const interval = setInterval(() => {
+            // cookie 已写入（此前关闭过或本次点击已生效）→ 横幅不会再显示，停止检查
+            if (document.cookie.includes('hide_app_banner_v2=')) {
+                clearInterval(interval);
+                autoClickAppBannerCloseFast._timer = null;
+                return;
+            }
+            const btn = document.querySelector('aside.app-banner .app-banner-close');
+            if (btn && Date.now() - lastClick >= 100) {
+                lastClick = Date.now();
+                btn.click();
+            }
+            // 30 秒仍未成功则停止，避免无限轮询；横幅后续动态出现时由 DOM 观察者重新启动
+            if (Date.now() - started > 30000) {
+                clearInterval(interval);
+                autoClickAppBannerCloseFast._timer = null;
+            }
+        }, 10); // 每 10 毫秒检查一次
+        autoClickAppBannerCloseFast._timer = interval;
     }  
   
     // 将会员专属的"在线观看"功能封面修复为普通封面
@@ -5025,7 +5169,8 @@
         'h2.title.is-4',
         '.movie-list .box',
         '.tile-item', // 支持“TA（们）还出演过”等 tile 小图列表
-        'a.article-item' // 资讯文章卡片
+        'a.article-item', // 资讯文章卡片
+        '#recommend-container .item > a' // “每周推荐”区域卡片（链接无 .box 类）
     ].join(', ');
 
     const MS_CACHE_KEY = 'javdb_google_translate_cache';
@@ -5295,6 +5440,14 @@
             return true;
         }
         return false;
+    }
+
+    // ---------- 辅助函数：判断是否为列表卡片（含"每周推荐"等无 .box 类的卡片链接） ----------
+    function isMsListCard(el) {
+        if (!el || !el.classList) return false;
+        if (el.classList.contains('box') || el.classList.contains('tile-item') || el.classList.contains('article-item')) return true;
+        // "每周推荐"(#recommend-container) 的卡片链接无 .box 类，按容器识别
+        return el.tagName === 'A' && !!el.closest('#recommend-container');
     }
 
     // ---------- 辅助函数：提取纯净核心文本（详情页用） ----------
@@ -5575,7 +5728,7 @@
             }
 
             // 【列表页处理】精准定位、保护番号、强制补空格、翻译Title
-            if (element.classList.contains('box') || element.classList.contains('tile-item')) {
+            if (isMsListCard(element)) {
                 // 1. 翻译悬浮提示 title 属性
                 const originalTitleAttr = element.getAttribute('title');
                 if (originalTitleAttr && originalTitleAttr.trim().length > 0) {
@@ -5693,9 +5846,9 @@
             if (pending.length === 0) return;
 
             // 【优化】列表页 .box 元素先批量收集文本，一次性翻译后再回填
-            // 🚀 核心修复：同时识别 .box、.tile-item 和 .article-item 为列表项，走批量翻译通道
-            const listItems = pending.filter(el => el.classList.contains('box') || el.classList.contains('tile-item') || el.classList.contains('article-item'));
-            const detailItems = pending.filter(el => !el.classList.contains('box') && !el.classList.contains('tile-item') && !el.classList.contains('article-item'));
+            // 🚀 核心修复：同时识别 .box、.tile-item、.article-item 及"每周推荐"卡片为列表项，走批量翻译通道
+            const listItems = pending.filter(el => isMsListCard(el));
+            const detailItems = pending.filter(el => !isMsListCard(el));
 
             // 列表页并发处理：收集所有待翻译文本 → 单次批量API → 统一回填
             if (listItems.length > 0) {
@@ -5792,6 +5945,12 @@
             }
             // 【已删除】autoClickAgeVerificationFast() 不能放在这里，否则会创建无数个定时器导致卡死
             
+            // 自动点击关闭应用推广横幅（横幅动态注入且尚未写入关闭 cookie 时重新拉起检查）
+            if (config.hideBanner && !document.cookie.includes('hide_app_banner_v2=') && document.querySelector('aside.app-banner')) {
+                autoClickAppBannerCloseFast();
+            }
+            // 从顶部域名栏检测最新域名（须在"隐藏顶部外部功能区"移除域名栏之前执行）
+            detectLatestDomain();
             if (config.hideTopNavExtras) {
                 document.querySelectorAll('nav.sub-header, div.top-meta').forEach(el => el.remove()); 
             }
@@ -5866,6 +6025,7 @@
     // 初始化：执行翻译、自动点击及监听
     function init() {
         loadConfig();
+        detectLatestDomain();       // 从顶部域名栏获取最新域名（供链接重写与设置面板展示）
         loadWatched();              // 读取已下载记录
         setupWatchedSync();         // 注册跨标签页同步
         injectStyles();
@@ -5899,6 +6059,7 @@
             applyOpenInNewTab();   // 全局链接新窗口打开
             hookSearchOpenNewTab(); // 🚀 搜索新窗口 + 分页当前页
             autoClickAgeVerificationFast();
+            autoClickAppBannerCloseFast(); // 自动点击关闭底部APP下载推广横幅
             attachSearchTypeListener();
             // 初始谷歌翻译增强
             if (config.translation) {
