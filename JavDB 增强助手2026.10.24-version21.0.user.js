@@ -71,10 +71,12 @@
   
     // 加载配置
     function loadConfig() {
+    console.log("[JavDB增强] loadConfig 开始执行");
         const saved = GM_getValue('javdb_config', null);
         if (saved) {
             try {
                 config = Object.assign({}, DEFAULT_CONFIG, JSON.parse(saved));
+                console.log("[JavDB增强] 配置已加载，loadActressInfo =", config.loadActressInfo);
             } catch (e) {
                 console.error('加载配置失败:', e);
             }
@@ -6357,7 +6359,15 @@
             }
             if (config.loadActressInfo) {
                 console.log("[JavDB增强] >>> 即将调用 loadActressInfo()");
-                loadActressInfo();
+                try {
+            console.log("[JavDB增强] 开始调用 loadActressInfo");
+            console.log("[JavDB增强] typeof loadActressInfo:", typeof loadActressInfo);
+            await loadActressInfo();
+            console.log("[JavDB增强] loadActressInfo 调用完成");
+        } catch (e) {
+            console.error("[JavDB增强] loadActressInfo 执行出错:", e);
+            console.error("[JavDB增强] 错误堆栈:", e.stack);
+        }
             }
             // 🚀 弹窗方式打开页面 + 悬浮大图
             setupDialogOpenDetail();
