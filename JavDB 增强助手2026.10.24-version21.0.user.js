@@ -521,6 +521,8 @@
     const JHS_ACTRESS_API_URL = "https://ja.wikipedia.org/wiki/";
     
     async function loadActressInfo() {
+        alert("[JavDB增强] loadActressInfo 函数已启动！\n\n请检查控制台查看详细日志");
+        
         // 在页面右下角显示调试状态
         const debugDiv = document.createElement('div');
         debugDiv.id = 'jhs-actress-debug';
@@ -6362,6 +6364,8 @@
                 try {
             console.log("[JavDB增强] 开始调用 loadActressInfo");
             console.log("[JavDB增强] typeof loadActressInfo:", typeof loadActressInfo);
+            console.log("[JavDB增强] 准备调用 loadActressInfo");
+            alert("[JavDB增强] 即将调用女优信息加载函数\n\nconfig.loadActressInfo = " + config.loadActressInfo + "\n当前URL = " + window.location.pathname);
             await loadActressInfo();
             console.log("[JavDB增强] loadActressInfo 调用完成");
         } catch (e) {
