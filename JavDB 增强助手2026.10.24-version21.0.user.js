@@ -2645,7 +2645,7 @@
     }
     
     /* 清除 Fancybox JS 动态写入的 top/left/transform，让 Flex 居中完美生效 */
-    .fancybox-slide--inline .fancybox__content {
+    .fancybox-slide--inline .fancybox__content:not(#preview-video-box) {
         width: auto !important;
         height: auto !important;
         max-width: 95vw !important;
@@ -2662,9 +2662,25 @@
         transform: none !important;
     }
     
+    /* 🚀 修复：JavDB 页面改动，#preview-video-box 作为 fancybox 内容容器 */
+    #preview-video-box.fancybox__content {
+        width: 85% !important;
+        max-width: 95vw !important;
+        max-height: 95vh !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        background: transparent !important;
+        overflow: visible !important;
+        position: relative !important;
+        top: auto !important;
+        left: auto !important;
+        transform: none !important;
+    }
+    
     /* 视频本身撑满容器，限制最大高度，为底部工具条留出空间 */
     .fancybox-slide--inline .fancybox__content #preview-video,
-    .fancybox-slide--inline .fancybox__content #jhs-preview-video {
+    .fancybox-slide--inline .fancybox__content #jhs-preview-video,
+    #preview-video-box video {
         width: 100% !important;
         height: auto !important;
         max-width: 92vw !important;
@@ -2677,7 +2693,8 @@
     }
     
     /* 确保工具条在弹窗内也能完美居中且不被截断 */
-    .fancybox-slide--inline .fancybox__content #video-bottom-toolbar {
+    .fancybox-slide--inline .fancybox__content #video-bottom-toolbar,
+    #preview-video-box #video-bottom-toolbar {
         max-width: 92vw;
         margin: 10px auto 0;
         display: flex !important;
