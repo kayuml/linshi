@@ -2,7 +2,7 @@
 // @name         JavDB 增强助手
 // @namespace    
 // @version      2026.10.24-version21.0
-// @description  JavDB 全站增强：① 深度汉化——繁简转换 + 内置谷歌翻译引擎（防缓存污染/并发限流/风控重试/残料二次翻译/季集转换），覆盖标题、资讯与关联列表；② 预览升级——DMM/FANZA 高画质预告片解析与一键画质切换、详情页长缩略图、封面就地播放、悬浮大图、大屏居中播放器；③ 浏览体验——自动年龄验证、自动关闭应用推广横幅、会员封面修复、原标题显示、主题自适应复制按钮、分页优化与跳页、毛玻璃搜索栏、链接新窗口、弹窗打开详情、域名自动重写、503 自动重试；④ 数据管理——评论与磁链增强、相关清单绕过 VIP、已下载标记与管理、本地/WebDAV 备份，全功能可开关
+// @description  JavDB 全站增强：① 深度汉化——繁简转换 + 内置谷歌翻译引擎（防缓存污染/并发限流/风控重试/残料二次翻译/季集转换），覆盖标题、资讯与关联列表；② 预览升级——DMM/FANZA 高画质预告片解析与一键画质切换、详情页长缩略图、封面就地播放、悬浮大图、大屏居中播放器；③ 浏览体验——自动关闭年龄验证、自动关闭应用推广横幅、会员封面修复、原标题显示、主题自适应复制按钮、分页优化与跳页、毛玻璃搜索栏、链接新窗口、弹窗打开详情、域名自动重写、503 自动重试；④ 数据管理——评论与磁链增强、相关清单绕过 VIP、已下载标记与管理、本地/WebDAV 备份，全功能可开关
 // @author       admin
 // @include      https://javdb*.com/*  
 // @grant        GM_addStyle
@@ -29,11 +29,11 @@
 (function() {
     'use strict';
     // ==================== 配置管理 ====================
-    // 用户脚本的默认配置，默认只开启汉化、自动点击年龄验证、自动点击关闭应用推广横幅、显示重试按钮和分页样式优化
+    // 用户脚本的默认配置，默认只开启汉化、自动关闭年龄验证、自动关闭应用推广横幅、显示重试按钮和分页样式优化
     const DEFAULT_CONFIG = {
         translation: true,           // 简体中文翻译（默认开启）
-        autoClickAge: true,          // 自动点击年龄验证（默认开启）
-        hideBanner: true,            // 自动点击关闭应用推广横幅（默认开启，键名沿用 hideBanner 以兼容旧配置）
+        autoClickAge: true,          // 自动关闭年龄验证（默认开启）
+        hideBanner: true,            // 自动关闭应用推广横幅（默认开启，键名沿用 hideBanner 以兼容旧配置）
         hideVipItems: false,         // 隐藏会员专属菜单
         hideFooter: false,           // 隐藏页脚导航
         hideFloatButtons: false,     // 隐藏悬浮按钮
@@ -978,6 +978,13 @@
             border: 1px solid #ddd; border-radius: 6px; font-size: 14px; outline: none;
         }
         html[data-theme="dark"] .javdb-domain-input { background: #2a2a2a; border-color: #444; color: #ddd; }
+        /* 链接域名重写子区块：内嵌于其开关项下方，仅开关开启时显示 */
+        .javdb-domain-sub {
+            margin: 10px 0 2px 0; padding: 10px 12px;
+            border-left: 3px solid #00bfa5; border-radius: 0 8px 8px 0;
+            background: rgba(0, 191, 165, 0.05);
+        }
+        html[data-theme="dark"] .javdb-domain-sub { background: rgba(0, 191, 165, 0.08); }
         
         /* 云备份管理弹窗样式 */
         .javdb-wd-manager-panel {
@@ -1006,8 +1013,8 @@
   
         const settingsConfig = [    
             { key: 'translation', label: '简体中文翻译', desc: '将繁体中文转换为简体中文' },    
-            { key: 'autoClickAge', label: '自动点击年龄验证', desc: '自动点击"是,我已满18岁"按钮' },    
-            { key: 'hideBanner', label: '自动点击关闭应用推广横幅', desc: '自动点击底部APP下载推广横幅的关闭按钮' },    
+            { key: 'autoClickAge', label: '自动关闭年龄验证', desc: '自动点击"是,我已满18岁"按钮' },    
+            { key: 'hideBanner', label: '自动关闭应用推广横幅', desc: '自动点击底部APP下载推广横幅的关闭按钮' },    
             { key: 'hideVipItems', label: '隐藏会员专属控件', desc: '隐藏‘更多短评需VIP或App查看’提示、原生相关清单、可播放、中字可播放等VIP控件' },
             { key: 'hideFooter', label: '隐藏页脚导航栏', desc: '隐藏底部导航栏' },    
             { key: 'hideFloatButtons', label: '隐藏悬浮按钮', desc: '隐藏右下角磁链下载、TOP按钮' },
@@ -1024,7 +1031,7 @@
             { key: 'paginationJump', label: '分页样式优化', desc: '为分页样式优化并添加跳转到指定页码功能' },    
             { key: 'beautifySearchBar', label: '搜索栏美化', desc: '毛玻璃质感搜索栏，独立圆角与主题自适应' },
             { key: 'openNewTab', label: '新窗口打开链接', desc: '影片/演员等链接及"搜索"在新窗口打开；底部分页保持当前页跳转，防标签页爆炸' },
-            { key: 'linkRewrite', label: '链接域名重写', desc: '在 javdb.com 页面将链接重写为顶部域名栏获取的最新域名（可在下方"链接域名重写"区块自定义，自定义优先）' },    
+            { key: 'linkRewrite', label: '链接域名重写', desc: '在 javdb.com 页面将链接重写为顶部域名栏获取的最新域名（开启后可在下方自定义域名，自定义优先）' },    
             { key: 'retryButton', label: '显示重试按钮', desc: '显示手动重新翻译按钮（依赖「简体中文翻译」开关）' },
             { key: 'autoReload503', label: '503自动重载', desc: '检测到"503 Service Temporarily Unavailable"错误页时自动重载重试（限次防死循环）' },
             { key: 'downloadMark', label: '已下载标记', desc: '列表页封面添加✓标记按钮，并提供已下载列表（查看/添加/编辑/删除）' },
@@ -1063,6 +1070,13 @@
                             <div class="javdb-toggle ${config[item.key] ? 'active' : ''} ${disabled ? 'disabled' : ''}" data-key="${item.key}"></div>
                         </div>
                         <div class="javdb-setting-desc">${item.desc}</div>
+                        ${item.key === 'linkRewrite' ? `
+                        <div class="javdb-domain-sub" id="javdb-domain-rewrite-block"${config.linkRewrite ? '' : ' style="display: none;"'}>
+                            <div class="javdb-setting-desc" style="margin-top: 0;">当前获取到的域名（自动从网站顶部域名栏 nav.sub-header 获取）</div>
+                            <div id="javdb-detected-domain" class="javdb-detected-domain">${detectedDomainText}</div>
+                            <div class="javdb-setting-desc" style="margin-top: 10px;">自定义域名（优先级高于自动获取的域名，留空则使用自动获取）</div>
+                            <input type="text" id="javdb-custom-domain" class="javdb-domain-input" placeholder="如 javdb581.com，留空使用自动获取的域名" value="${customDomainValue}">
+                        </div>` : ''}
                     </div>`;
                 }).join('')}
             </div>
@@ -1079,18 +1093,6 @@
                     </select>
                 </div>
             </div>` : ''}
-            <div class="javdb-settings-section">
-                <h3>🔗 链接域名重写</h3>
-                <div class="javdb-setting-item" style="margin-bottom: 0;">
-                    <div class="javdb-setting-head">
-                        <span class="javdb-setting-label">当前获取到的域名</span>
-                    </div>
-                    <div class="javdb-setting-desc">自动从网站顶部域名栏(nav.sub-header)获取的最新域名</div>
-                    <div id="javdb-detected-domain" class="javdb-detected-domain">${detectedDomainText}</div>
-                    <div class="javdb-setting-desc" style="margin-top: 10px;">自定义域名（优先级高于自动获取的域名，留空则使用自动获取）</div>
-                    <input type="text" id="javdb-custom-domain" class="javdb-domain-input" placeholder="如 javdb581.com，留空使用自动获取的域名" value="${customDomainValue}">
-                </div>
-            </div>
             <div class="javdb-settings-section">
                 <h3>💾 数据备份与恢复</h3>
                 <p>包含：功能开关设置、已下载标记列表（含链接/系列）</p>
@@ -1161,6 +1163,11 @@
                 if (key === 'translation') {
                     updateRetryButtonDisabledState(panel);
                 }
+                // 切换链接域名重写开关时联动显隐其域名配置子区块
+                if (key === 'linkRewrite') {
+                    const domainBlock = panel.querySelector('#javdb-domain-rewrite-block');
+                    if (domainBlock) domainBlock.style.display = config.linkRewrite ? '' : 'none';
+                }
             };
         });
 
@@ -1184,7 +1191,7 @@
             if (domainInput) {
                 const rawDomain = domainInput.value.trim();
                 const normalizedDomain = normalizeDomainInput(rawDomain);
-                if (rawDomain && !normalizedDomain) {
+                if (rawDomain && !normalizedDomain && config.linkRewrite) {
                     alert('自定义域名格式不正确，请填写形如 javdb581.com 的域名（无需 http:// 前缀或路径）');
                     return;
                 }
@@ -3887,7 +3894,7 @@
         }, 10); // 每 10 毫秒检查一次
     }
 
-    // 使用 setInterval 高频检查并极速自动点击底部APP下载推广横幅的关闭按钮（对齐自动点击年龄验证的实现）
+    // 使用 setInterval 高频检查并极速自动点击底部APP下载推广横幅的关闭按钮（对齐自动关闭年龄验证的实现）
     // 网站控制器(app-banner#close)点击后写入 hide_app_banner_v2 cookie(30天)并隐藏横幅；
     // 若点击时 Stimulus 控制器尚未接管则点击无效，故持续补点，直到 cookie 写入或超时
     function autoClickAppBannerCloseFast() {
@@ -5945,7 +5952,7 @@
             }
             // 【已删除】autoClickAgeVerificationFast() 不能放在这里，否则会创建无数个定时器导致卡死
             
-            // 自动点击关闭应用推广横幅（横幅动态注入且尚未写入关闭 cookie 时重新拉起检查）
+            // 自动关闭应用推广横幅（横幅动态注入且尚未写入关闭 cookie 时重新拉起检查）
             if (config.hideBanner && !document.cookie.includes('hide_app_banner_v2=') && document.querySelector('aside.app-banner')) {
                 autoClickAppBannerCloseFast();
             }
@@ -6059,7 +6066,7 @@
             applyOpenInNewTab();   // 全局链接新窗口打开
             hookSearchOpenNewTab(); // 🚀 搜索新窗口 + 分页当前页
             autoClickAgeVerificationFast();
-            autoClickAppBannerCloseFast(); // 自动点击关闭底部APP下载推广横幅
+            autoClickAppBannerCloseFast(); // 自动关闭底部APP下载推广横幅（自动点击其关闭按钮）
             attachSearchTypeListener();
             // 初始谷歌翻译增强
             if (config.translation) {
