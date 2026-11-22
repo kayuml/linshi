@@ -45,6 +45,7 @@
         hideTopNavExtras: false,     // 隐藏顶部外部功能区
         hideSearchKeywords: false,   // 隐藏搜索区域热搜关键词
         hideMagnetSubmit: false,     // 隐藏提交磁链控件
+        loadActressInfo: true,     // 加载女优信息（默认开启）
         copyButtons: true,          // 添加复制按钮（默认开启）
         fixVipCover: false,          // 修复会员专属封面
         showOriginTitle: true,      // 自动显示原标题（默认开启）
@@ -512,6 +513,106 @@
     }
 
     // 加载相关清单数据到独立容器
+    
+    // ==================== 女优信息加载 ====================
+    // 同步 JAV-JHS ActressInfoPlugin：从日本维基百科抓取女优信息
+    const JHS_ACTRESS_API_URL = "https://ja.wikipedia.org/wiki/";
+    
+    async function loadActressInfo() {
+        if (!config.loadActressInfo) return;
+        if (!window.location.pathname.startsWith('/v/')) return;
+        if (loadActressInfo._loaded) return;
+        
+        const actressLinks = document.querySelectorAll('.actor-list a');
+        if (!actressLinks.length) return;
+        
+        loadActressInfo._loaded = true;
+        
+        const cacheKey = 'jhs_actress_info_cache';
+        const cacheData = (() => {
+            try { return JSON.parse(localStorage.getItem(cacheKey)) || {}; }
+            catch (e) { return {}; }
+        })();
+        
+        const infoContainer = document.createElement('div');
+        infoContainer.className = 'jhs-actress-info';
+        
+        for (const link of actressLinks) {
+            const name = link.textContent.trim();
+            if (!name) continue;
+            
+            let info = cacheData[name];
+            if (!info) {
+                try {
+                    info = await fetchActressInfo(name);
+                    if (info) cacheData[name] = info;
+                } catch (e) {
+                    console.warn(`[JavDB增强] 获取女优信息失败: ${name}`, e);
+                }
+            }
+            
+            if (info) {
+                const row = document.createElement('div');
+                row.className = 'jhs-actress-info-row';
+                row.innerHTML = `
+                    <span class="jhs-actress-info-item"><strong>${name}:</strong></span>
+                    <a href="${info.url}" target="_blank" style="display: contents;">
+                        ${info.birthday ? `<span class="jhs-info-tag">${info.birthday}</span>` : ''}
+                        ${info.age ? `<span class="jhs-info-tag">${info.age}</span>` : ''}
+                        ${info.height ? `<span class="jhs-info-tag">${info.height}</span>` : ''}
+                        ${info.weight ? `<span class="jhs-info-tag">${info.weight}</span>` : ''}
+                        ${info.threeSize ? `<span class="jhs-info-tag">${info.threeSize}</span>` : ''}
+                        ${info.braSize ? `<span class="jhs-info-tag">${info.braSize}</span>` : ''}
+                    </a>
+                `;
+                infoContainer.appendChild(row);
+            }
+        }
+        
+        if (infoContainer.children.length > 0) {
+            const actorList = document.querySelector('.actor-list');
+            if (actorList) {
+                actorList.parentElement.insertBefore(infoContainer, actorList.nextSibling);
+            }
+        }
+        
+        localStorage.setItem(cacheKey, JSON.stringify(cacheData));
+    }
+    
+    async function fetchActressInfo(name) {
+        // 特殊名称处理
+        if (name === '三上悠亞') name = '三上悠亜';
+        
+        const url = JHS_ACTRESS_API_URL + encodeURIComponent(name);
+        const response = await fetch(url);
+        if (!response.ok) return null;
+        
+        const html = await response.text();
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(html, 'text/html');
+        
+        const birthday = doc.querySelector('a[title="誕生日"]')?.closest('tr')?.querySelector('td')?.textContent?.trim() || '';
+        const ageText = doc.querySelector('th:has(+ td)')?.textContent?.includes('現年齢') 
+            ? doc.querySelector('th:has(+ td)')?.closest('tr')?.querySelector('td')?.textContent?.trim() 
+            : '';
+        const age = ageText ? ageText.replace(/[^\d]/g, '') + '岁' : '';
+        
+        const heightRow = Array.from(doc.querySelectorAll('tr')).find(r => r.querySelector('a[title="身長"]'));
+        const height = heightRow ? heightRow.querySelector('td')?.textContent?.trim()?.split(' ')[0] + 'cm' : '';
+        
+        const weightRow = Array.from(doc.querySelectorAll('tr')).find(r => r.querySelector('a[title="体重"]'));
+        let weight = weightRow ? weightRow.querySelector('td')?.textContent?.trim()?.split('/')?.[1]?.trim() : '';
+        if (weight === '― kg') weight = '';
+        
+        const threeSizeRow = Array.from(doc.querySelectorAll('tr')).find(r => r.querySelector('a[title="スリーサイズ"]'));
+        const threeSize = threeSizeRow ? threeSizeRow.querySelector('td')?.textContent?.trim() : '';
+        
+        const braSizeRow = Array.from(doc.querySelectorAll('tr')).find(r => r.textContent.includes('ブラサイズ'));
+        const braSize = braSizeRow ? braSizeRow.querySelector('td')?.textContent?.trim() : '';
+        
+        return { birthday, age, height, weight, threeSize, braSize, url };
+    }
+
     async function loadRelatedData(container, append = false) {
         if (relatedState.loading) return;
         if (append && !relatedState.hasMore) return;     // 仅"加载更多"时拦截，首屏始终放行
@@ -1036,6 +1137,7 @@
             { key: 'hideTopNavExtras', label: '隐藏顶部外部功能区', desc: '隐藏顶部的域名/公告栏和磁链页顶部的官方App/加入TG频道推广按钮' },
             { key: 'hideSearchKeywords', label: '隐藏热搜关键词列表', desc: '隐藏搜索栏下方的热搜关键词（LUXU、VR、无码流出等）区域' },
             { key: 'hideMagnetSubmit', label: '隐藏提交磁链控件', desc: '隐藏磁链页面的"提交磁链"按钮和顶部导航栏的"提交的磁链"链接' },
+            { key: 'loadActressInfo', label: '加载女优信息', desc: '在详情页显示女优的生日、年龄、身高、体重、三围等信息（来源：日本维基百科）' },
             { key: 'copyButtons', label: '添加复制按钮', desc: '为标题、系列等添加复制按钮' },
             { key: 'fixVipCover', label: '修复会员封面', desc: '将会员专属封面恢复为普通封面' },    
             { key: 'showOriginTitle', label: '自动显示原标题', desc: '自动显示影片原标题' },    
@@ -2631,6 +2733,17 @@
     }
 
     // ========== 替换：全局注入预览视频尺寸与居中样式 ==========
+    
+        /* 女优信息样式 */
+        .jhs-actress-info { margin-top: 10px; padding: 10px; background: #f9f9f9; border-radius: 4px; }
+        .jhs-actress-info-row { display: flex; flex-wrap: wrap; gap: 15px; margin-bottom: 8px; }
+        .jhs-actress-info-item { font-size: 13px; color: #666; }
+        .jhs-actress-info-item strong { color: #333; }
+        .jhs-info-tag { background-color: #ecf5ff; display: inline-block; height: 28px; padding: 0 8px; line-height: 28px; font-size: 12px; color: #409eff; border: 1px solid #d9ecff; border-radius: 4px; box-sizing: border-box; white-space: nowrap; }
+        html[data-theme="dark"] .jhs-actress-info { background: #2a2a2a; }
+        html[data-theme="dark"] .jhs-actress-info-item { color: #aaa; }
+        html[data-theme="dark"] .jhs-actress-info-item strong { color: #ddd; }
+
     function injectPreviewVideoGlobalStyles() {
         if (document.getElementById('jhs-preview-video-global-style')) return;
         const style = document.createElement('style');
