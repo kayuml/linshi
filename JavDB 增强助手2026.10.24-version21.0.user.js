@@ -2636,70 +2636,13 @@
         const style = document.createElement('style');
         style.id = 'jhs-preview-video-global-style';
         style.textContent = `
-    /* 【核心修复】让 Fancybox 的 slide 容器变成 Flex 居中布局，无视 JS 的错误定位 */
-    .fancybox-slide--inline {
-        display: flex !important;
-        align-items: center !important;
-        justify-content: center !important;
-        overflow: auto !important; /* 屏幕太小时允许滚动，防止按钮被遮挡 */
-    }
-    
-    /* 清除 Fancybox JS 动态写入的 top/left/transform，让 Flex 居中完美生效 */
-    .fancybox-slide--inline .fancybox__content:not(#preview-video-box) {
-        width: auto !important;
-        height: auto !important;
-        max-width: 95vw !important;
-        max-height: 95vh !important;
-        margin: 0 !important;
-        padding: 0 !important;
-        background: transparent !important;
-        overflow: visible !important;
-        
-        /* 关键：重置 JS 的定位干扰 */
-        position: relative !important;
-        top: auto !important;
-        left: auto !important;
-        transform: none !important;
-    }
-    
-    /* 🚀 修复：JavDB 页面改动，#preview-video-box 作为 fancybox 内容容器 */
+    /* 🚀 同步 JAV-JHS v3.3.6.031：简化预览视频样式，让 Fancybox 自动处理居中和尺寸 */
     #preview-video-box.fancybox__content {
         width: 85% !important;
-        max-width: 95vw !important;
-        max-height: 95vh !important;
-        margin: 0 !important;
-        padding: 0 !important;
-        background: transparent !important;
-        overflow: visible !important;
-        position: relative !important;
-        top: auto !important;
-        left: auto !important;
-        transform: none !important;
     }
     
-    /* 视频本身撑满容器，限制最大高度，为底部工具条留出空间 */
-    .fancybox-slide--inline .fancybox__content #preview-video,
-    .fancybox-slide--inline .fancybox__content #jhs-preview-video,
-    #preview-video-box video {
-        width: 100% !important;
-        height: auto !important;
-        max-width: 92vw !important;
-        max-height: 82vh !important; /* 留出约 10vh 给底部的画质切换工具条 */
-        object-fit: contain !important;
-        background: #000 !important;
-        display: block !important;
-        border-radius: 4px !important;
-        margin: 0 auto !important;
-    }
-    
-    /* 确保工具条在弹窗内也能完美居中且不被截断 */
-    .fancybox-slide--inline .fancybox__content #video-bottom-toolbar,
-    #preview-video-box #video-bottom-toolbar {
-        max-width: 92vw;
-        margin: 10px auto 0;
-        display: flex !important;
-        justify-content: center !important;
-        flex-wrap: wrap;
+    .fancybox__container {
+        z-index: 99999999 !important;
     }
     `;
         document.head.appendChild(style);
