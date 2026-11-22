@@ -1,7 +1,7 @@
 // ==UserScript==  
 // @name         JavDB 增强助手
 // @namespace    
-// @version      2026.10.24-version21.4
+// @version      2026.10.24-version21.8
 // @description  JavDB 全站增强：① 深度汉化——繁简转换 + 内置谷歌翻译引擎（防缓存污染/并发限流/风控重试/残料二次翻译/季集转换），覆盖标题、资讯与关联列表；② 预览升级——DMM/FANZA 高画质预告片解析与一键画质切换、详情页长缩略图、封面就地播放、悬浮大图、大屏居中播放器；③ 浏览体验——自动关闭年龄验证、自动关闭应用推广横幅、会员封面修复、原标题显示、主题自适应复制按钮、分页优化与跳页、毛玻璃搜索栏、链接新窗口、弹窗打开详情、域名自动重写、503 自动重试；④ 数据管理——评论与磁链增强、相关清单绕过 VIP、已下载标记与管理、本地/WebDAV 备份，全功能可开关
 // @author       admin
 // @include      https://javdb*.com/*  
@@ -531,18 +531,17 @@
         const isDetailPage = path.startsWith('/v/');
         if (!isStarPage && !isDetailPage) return;
 
-        // 本功能专用样式：详情页"名字+三组标签"强制同一行（极窄时整行横向细滚动，绝不上下折行）；演员页按 JHS 双行字段排布
+        // 本功能专用样式：
+        // 详情页上下两排（上排女优名、下排三组标签）；标签采用 JHS 同级尺寸(12px/26px)保证完整放下、清晰可读；
+        // contain:inline-size 切断最小宽度向侧栏 flex 列的传导（杜绝右凸）；极窄面板时标签自动换行兜底，信息始终完整可见、无滚动条；
+        // 演员页按 JHS 双行字段排布
         if (!loadActressInfo._styled) {
             loadActressInfo._styled = true;
             GM_addStyle(`
-                .actress-info.ht-detail-row { flex-wrap: nowrap; align-items: center; gap: 6px; overflow-x: auto; overflow-y: hidden; padding-bottom: 2px; scrollbar-width: thin; scrollbar-color: rgba(64,158,255,.45) transparent; }
-                .actress-info.ht-detail-row::-webkit-scrollbar { height: 4px; }
-                .actress-info.ht-detail-row::-webkit-scrollbar-track { background: transparent; }
-                .actress-info.ht-detail-row::-webkit-scrollbar-thumb { background: rgba(64,158,255,.45); border-radius: 2px; }
-                .actress-info.ht-detail-row::-webkit-scrollbar-thumb:hover { background: rgba(64,158,255,.8); }
-                .actress-info.ht-detail-row > strong { flex: 0 0 auto; }
-                .actress-info .ht-tag-line { display: flex; flex-wrap: nowrap; gap: 5px; flex: 0 0 auto; }
-                .actress-info .ht-tag-line .jhs-info-tag { flex: 0 0 auto; margin: 0; font-size: 11px; height: 22px; line-height: 20px; padding: 0 6px; white-space: nowrap; }
+                .actress-info.ht-detail-row { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; contain: inline-size; overflow: hidden; }
+                .actress-info .ht-name { max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+                .actress-info .ht-tag-line { display: flex; flex-wrap: wrap; gap: 6px; max-width: 100%; }
+                .actress-info .ht-tag-line .jhs-info-tag { margin: 0; font-size: 12px; height: 26px; line-height: 24px; padding: 0 8px; white-space: nowrap; }
                 .ht-star-fields { font-size: 17px; font-weight: normal; margin-top: 5px; }
                 .ht-star-fields .ht-star-row { display: flex; flex-wrap: wrap; margin-bottom: 10px; }
                 .ht-star-fields .ht-star-row span { white-space: nowrap; }
@@ -566,17 +565,17 @@
             .replace(/\s*([年月日])\s*/g, '$1')
             .trim();
 
-        // 三围规范化（演员页用）：统一为 "87 - 59 - 90cm"，保证带单位
+        // 三围规范化：统一为 "87 - 59 - 90cm"，保证带单位
         const withCm = raw => {
             let s = (raw || '').replace(/\s*cm\s*/gi, 'cm').trim();
             if (s && !/cm$/i.test(s)) s += 'cm';
             return s;
         };
 
-        // 影片详情页：三组标签 ① 生日+年龄 ② 身高+体重 ③ 三围+罩杯（如图，三围不带单位），与名字同一排
+        // 影片详情页：三组标签 ① 生日+年龄 ② 身高+体重 ③ 三围+罩杯（带 cm），下排完整显示
         const buildTags = info => {
             const birthday = cleanBirthday(info.birthday);
-            const threeSize = (info.threeSize || '').replace(/\s*cm\s*/gi, '').trim();
+            const threeSize = withCm(info.threeSize);
             return [
                 [birthday, info.age],
                 [info.height, info.weight],
@@ -646,7 +645,7 @@
             return;
         }
 
-        // ===== 影片详情页：在"演員"栏后插入，名字与三组标签同一行 =====
+        // ===== 影片详情页：在"演員"栏后插入，上排女优名、下排三组标签完整显示 =====
         let nameList = [];
 
         // 选择器1: .actor-female
@@ -702,7 +701,7 @@
             if (info) {
                 infoHtml += `
                     <div class="panel-block actress-info ht-detail-row">
-                        <strong><span style="user-select: all">${name}</span>: </strong>
+                        <strong class="ht-name"><span style="user-select: all">${name}</span>:</strong>
                         <a class="ht-tag-line" href="${info.url}" target="_blank">${buildTags(info)}</a>
                     </div>
                 `;
