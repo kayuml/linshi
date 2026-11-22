@@ -523,8 +523,12 @@
         if (!window.location.pathname.startsWith('/v/')) return;
         if (loadActressInfo._loaded) return;
         
-        const actressLinks = document.querySelectorAll('.actor-list a');
-        if (!actressLinks.length) return;
+        // 同步 JAV-JHS: 使用 .actor-female 或 span[onmouseover*="star_"] a 选择器
+        let nameList = Array.from(document.querySelectorAll('.actor-female')).map(el => el.textContent.trim());
+        if (!nameList.length) {
+            nameList = Array.from(document.querySelectorAll('span[onmouseover*="star_"] a')).map(el => el.textContent.trim());
+        }
+        if (!nameList.length) return;
         
         loadActressInfo._loaded = true;
         
@@ -534,11 +538,10 @@
             catch (e) { return {}; }
         })();
         
-        const infoContainer = document.createElement('div');
-        infoContainer.className = 'jhs-actress-info';
+        let infoHtml = '';
         
-        for (const link of actressLinks) {
-            const name = link.textContent.trim();
+        for (let i = 0; i < nameList.length; i++) {
+            const name = nameList[i];
             if (!name) continue;
             
             let info = cacheData[name];
@@ -552,27 +555,26 @@
             }
             
             if (info) {
-                const row = document.createElement('div');
-                row.className = 'jhs-actress-info-row';
-                row.innerHTML = `
-                    <span class="jhs-actress-info-item"><strong>${name}:</strong></span>
-                    <a href="${info.url}" target="_blank" style="display: contents;">
-                        ${info.birthday ? `<span class="jhs-info-tag">${info.birthday}</span>` : ''}
-                        ${info.age ? `<span class="jhs-info-tag">${info.age}</span>` : ''}
-                        ${info.height ? `<span class="jhs-info-tag">${info.height}</span>` : ''}
-                        ${info.weight ? `<span class="jhs-info-tag">${info.weight}</span>` : ''}
-                        ${info.threeSize ? `<span class="jhs-info-tag">${info.threeSize}</span>` : ''}
-                        ${info.braSize ? `<span class="jhs-info-tag">${info.braSize}</span>` : ''}
-                    </a>
+                infoHtml += `
+                    <div class="panel-block actress-info">
+                        <strong style="margin-right: 5px;"><span style="user-select: all">${name}</span>: </strong>
+                        <a href="${info.url}" style="margin-left: 5px" target="_blank">
+                            <span class="info-tag">${info.birthday} ${info.age}</span>
+                            <span class="info-tag">${info.height} ${info.weight}</span>
+                            <span class="info-tag">${info.threeSize} ${info.braSize}</span>
+                        </a>
+                    </div>
                 `;
-                infoContainer.appendChild(row);
+            } else {
+                infoHtml += `<div class="panel-block actress-info"><strong style="margin-right: 5px;"><span style="user-select: all">${name}</span>: </strong><a href="${JHS_ACTRESS_API_URL}${encodeURIComponent(name)}" target="_blank">暂无此演员信息</a></div>`;
             }
         }
         
-        if (infoContainer.children.length > 0) {
-            const actorList = document.querySelector('.actor-list');
-            if (actorList) {
-                actorList.parentElement.insertBefore(infoContainer, actorList.nextSibling);
+        // 同步 JAV-JHS: 在"演員"标签后插入
+        if (infoHtml) {
+            const actorLabel = Array.from(document.querySelectorAll('strong')).find(el => el.textContent.includes('演員'));
+            if (actorLabel && actorLabel.parentElement) {
+                actorLabel.parentElement.insertAdjacentHTML('afterend', infoHtml);
             }
         }
         
