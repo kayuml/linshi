@@ -519,6 +519,7 @@
     const JHS_ACTRESS_API_URL = "https://ja.wikipedia.org/wiki/";
     
     async function loadActressInfo() {
+        console.log("[JavDB增强] loadActressInfo 开始执行");
         if (!config.loadActressInfo) return;
         if (!window.location.pathname.startsWith('/v/')) return;
         if (loadActressInfo._loaded) return;
@@ -527,6 +528,7 @@
         let nameList = Array.from(document.querySelectorAll('.actor-female')).map(el => el.textContent.trim());
         if (!nameList.length) {
             nameList = Array.from(document.querySelectorAll('span[onmouseover*="star_"] a')).map(el => el.textContent.trim());
+        console.log("[JavDB增强] 找到的演员列表:", nameList);
         }
         if (!nameList.length) return;
         
