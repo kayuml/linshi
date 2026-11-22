@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         JAV-JHS
 // @namespace    JAV-JHS
-// @version      3.3.6.030
+// @version      3.3.6.031
 // @author       JAV-JHS
 // @description  Jav-鉴黄师 收藏、屏蔽、标记已下载; 屏蔽标签、屏蔽演员、同步收藏演员、新作品检测; 免VIP查看热播、Top250排行榜、Fc2ppv、可查看所有评论信息、相关清单; 支持云盘备份; 以图识图; 字幕搜索; JavDb|JavBus
 // @license      MIT
@@ -686,6 +686,10 @@ const _updateImgServer = originalStr => originalStr.replace(/https:\/\/.*?\/rhe9
             movie_sort_by: "relevance"
         };
         return (await gmHttp.get(url, params, headers)).data.movies;
+    },
+    searchMovieId: async carNum2 => {
+        const otherSitePlugin = window.pluginManager.getBean("OtherSitePlugin"), url = `${await otherSitePlugin.getJavDbUrl()}/search?q=${null == carNum2 ? void 0 : carNum2.trim()}`, html = await gmHttp.get(url), $dom = utils.htmlTo$dom(html), itemSelector = otherSitePlugin.getSelector("javdb").itemSelector, $boxList = $dom.find(itemSelector);
+        return otherSitePlugin.getBoxCarInfoList($boxList);
     },
     getMovieDetail: async movieId => {
         let url = `${apiUrl}/v4/movies/${movieId}`, headers = {
@@ -1730,7 +1734,7 @@ window.ImageHoverPreview = class {
             header.className = "console-logger-header";
             const title = document.createElement("div");
             title.className = "console-logger-title";
-            title.textContent = "JHS V3.3.6.030";
+            title.textContent = "JHS V3.3.6.031";
             const controls = document.createElement("div");
             controls.className = "console-logger-controls";
             this.maximizeBtn = document.createElement("button");
@@ -2378,26 +2382,10 @@ class DetailPagePlugin extends BasePlugin {
         super();
     }
     handle() {
-        if (window.isDetailPage) {
-            $(".video-meta-panel a").each((function() {
-                const href = $(this).attr("href");
-                href && (href.startsWith("http://") || href.startsWith("https://") || href.startsWith("/")) && $(this).attr("target", "_blank");
-            }));
-            this.handleFancyBox();
-        }
-    }
-    handleFancyBox() {
-        document.addEventListener("click", (function(e) {
-            if (e.target.closest(".fancybox-button--thumbs")) {
-                const isVisible = !$(".fancybox-thumbs").is(":hidden");
-                localStorage.setItem("jhs_fancyboxThumbs", isVisible.toString());
-                unsafeWindow.$.fancybox.defaults.thumbs.autoStart = isVisible;
-            }
+        window.isDetailPage && $(".video-meta-panel a").each((function() {
+            const href = $(this).attr("href");
+            href && (href.startsWith("http://") || href.startsWith("https://") || href.startsWith("/")) && $(this).attr("target", "_blank");
         }));
-        if (void 0 !== unsafeWindow.$.fancybox) {
-            const savedState = localStorage.getItem("jhs_fancyboxThumbs");
-            unsafeWindow.$.fancybox.defaults.thumbs.autoStart = "true" === savedState;
-        }
     }
 }
 
@@ -2585,40 +2573,50 @@ class PreviewVideoPlugin extends BasePlugin {
         return "PreviewVideoPlugin";
     }
     async initCss() {
-        return "\n            .video-control-btn {\n                min-width:120px;\n                padding: 7px 12px;\n                font-size: 12px;\n                background: rgba(0,0,0,0.7);\n                color: white;\n                border: none;\n                border-radius: 4px;\n                cursor: pointer;\n            }\n            .video-control-btn.active {\n                background-color: #1890ff;\n                color: white;\n                font-weight: bold;\n                border: 2px solid #096dd9;\n            }\n        ";
+        return "\n            .video-control-btn {\n                min-width:120px;\n                padding: 7px 12px;\n                font-size: 12px;\n                background: rgba(0,0,0,0.7);\n                color: white;\n                border: none;\n                border-radius: 4px;\n                cursor: pointer;\n            }\n            .video-control-btn.active {\n                background-color: #1890ff;\n                color: white;\n                font-weight: bold;\n                border: 2px solid #096dd9;\n            }\n            \n            #preview-video-box.fancybox__content {\n                width: 85% !important;\n            }\n            \n            .fancybox__container{\n                z-index: 99999999!important\n            }\n        ";
     }
     async handle() {
         if (!isDetailPage) return;
+        $("#preview-video-box video").attr("id", "preview-video");
         let settingObj = await storageManager.getSetting();
         this.filterHotKey = settingObj.filterHotKey;
         this.favoriteHotKey = settingObj.favoriteHotKey;
         this.speedVideoHotKey = settingObj.speedVideoHotKey;
-        $("#preview-video").removeAttr("width height").css({
+        const $previewVideo = $("#preview-video");
+        $previewVideo.removeAttr("width height").css({
             width: "",
             height: ""
         });
         let $preview = $(".preview-video-container");
         $preview.on("click", (event => {
-            utils.loopDetector((() => $(".fancybox-content #preview-video").length > 0), (() => {
+            utils.loopDetector((() => $(".fancybox__content #preview-video").length > 0), (() => {
                 this.handleVideo().then();
             }));
         }));
+        if (!$previewVideo.attr("src") && $previewVideo.attr("data-url")) {
+            const url = $previewVideo.attr("data-url");
+            $previewVideo.attr("back-data-url", url);
+            $previewVideo.removeAttr("data-url");
+        }
         await storageManager.getSetting("enableLoadPreviewVideo", YES) !== YES || currentHref.includes("autoPlay=1") || this.initDmm().then();
         let href = window.location.href;
-        (href.includes("gallery-1") || href.includes("gallery-2")) && utils.loopDetector((() => $(".fancybox-content #preview-video").length > 0), (() => {
-            $(".fancybox-content #preview-video").length > 0 && this.handleVideo().then();
+        (href.includes("gallery-1") || href.includes("gallery-2")) && utils.loopDetector((() => $(".fancybox__content #preview-video").length > 0), (() => {
+            $(".fancybox__content #preview-video").length > 0 && this.handleVideo().then();
         }));
         href.includes("autoPlay=1") && $preview.length > 0 && $preview[0].click();
     }
     async initDmm() {
         try {
-            const dmmVideoMap = await getDmmVideo(this.getPageInfo().carNum, !1);
-            if (!dmmVideoMap) return;
+            const dmmVideoMap = await getDmmVideo(this.getPageInfo().carNum, !1), $previewVideoEL = $("#preview-video");
+            if (!dmmVideoMap) {
+                $previewVideoEL.attr("data-url", $previewVideoEL.attr("back-data-url"));
+                return;
+            }
             let settingDefaultVideoQuality = await storageManager.getSetting("videoQuality");
             clog.debug("解析其它画质预览视频", "设置-期望画质", settingDefaultVideoQuality);
             const defaultVideoUrl = dmmVideoMap[selectDefaultQuality(Object.keys(dmmVideoMap), settingDefaultVideoQuality)];
             clog.log("切换其它画质预览视频: ", defaultVideoUrl);
-            const $previewVideoEL = $("#preview-video"), videoEl = $previewVideoEL.length ? $previewVideoEL[0] : null, isVideoElementHidden = !videoEl || utils.isHidden($previewVideoEL);
+            const videoEl = $previewVideoEL.length ? $previewVideoEL[0] : null, isVideoElementHidden = !videoEl || utils.isHidden($previewVideoEL);
             if ($previewVideoEL.length) {
                 if (videoEl) {
                     const currentTime = videoEl.currentTime;
@@ -2632,10 +2630,10 @@ class PreviewVideoPlugin extends BasePlugin {
             } else {
                 clog.debug("JavDB没有视频播放元素, 开始创建...");
                 const videoCoverSrc = $(".column-video-cover img").attr("src");
-                $(".preview-images").prepend(`\n                    <a class="preview-video-container" data-fancybox="gallery" href="#preview-video">\n                        <span>預告片</span>\n                        <img src="${videoCoverSrc}" class="video-cover" style="width: 150px; height: auto;" alt="">\n                    </a>\n                `);
+                $(".preview-images").prepend(`\n                    <a class="preview-video-container" data-fancybox="gallery" href="#preview-video-box">\n                        <span>預告片</span>\n                        <img src="${videoCoverSrc}" class="video-cover" style="width: 150px; height: auto;" alt="">\n                    </a>\n                `);
                 $("#preview-video").length || $(".preview-video-container").after('\n                        <video id="preview-video" playsinline controls muted preload="auto" loop style="display:none"> </video>\n                    ');
                 $(".preview-video-container").on("click", (event => {
-                    utils.loopDetector((() => $(".fancybox-content #preview-video").length > 0), (async () => {
+                    utils.loopDetector((() => $(".fancybox__content #preview-video").length > 0), (async () => {
                         await this.handleVideo();
                     }));
                 }));
@@ -2648,6 +2646,7 @@ class PreviewVideoPlugin extends BasePlugin {
         if (await storageManager.getSetting("enableLoadPreviewVideo", YES) === NO) return;
         const $videoEl = $("#preview-video");
         if (!$videoEl.length) return;
+        if ($("#video-bottom-toolbar").length) return;
         const $videoContainer = $videoEl.parent();
         $videoContainer.css("position", "relative");
         const videoEl = $videoEl[0], jhs_videoMuted = localStorage.getItem("jhs_videoMuted");
@@ -2662,7 +2661,8 @@ class PreviewVideoPlugin extends BasePlugin {
             display: "flex",
             gap: "5px",
             "align-items": "center",
-            "flex-wrap": "wrap"
+            "flex-wrap": "wrap",
+            margin: "20px 0"
         }), $qualityButtonGroup = $("<div></div>").css({
             display: "flex",
             gap: "5px",
@@ -3066,8 +3066,8 @@ class Fc2Plugin extends BasePlugin {
     }
     async openFc2Page(movieId, carNum2, url) {
         const otherSitePlugin = this.getBean("OtherSitePlugin");
-        let javDbUrl = await otherSitePlugin.getJavDbUrl();
-        window.open(`${javDbUrl}/users/collection_codes?movieId=${movieId}&carNum=${carNum2}&url=${url}`);
+        await otherSitePlugin.getJavDbUrl();
+        window.open(url);
     }
 }
 
@@ -4838,15 +4838,7 @@ class ReviewPlugin extends BasePlugin {
             }
             if (isJavBus) {
                 let carNum2 = this.getPageInfo().carNum;
-                const movies = await javDbApi.searchMovie(carNum2);
-                let movieId = null;
-                for (let i = 0; i < movies.length; i++) {
-                    let item = movies[i];
-                    if (item.number.toLowerCase() === carNum2.toLowerCase()) {
-                        movieId = item.id;
-                        break;
-                    }
-                }
+                const matchedItem = (await javDbApi.searchMovieId(carNum2)).find((item => item.carNum.toLowerCase() === carNum2.toLowerCase())), movieId = matchedItem ? matchedItem.movieId : null;
                 if (!movieId) return;
                 this.showReview(movieId, $("#sample-waterfall")).then();
             }
