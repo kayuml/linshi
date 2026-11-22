@@ -26,6 +26,18 @@
 // @run-at       document-start  
 // @icon         
 // ==/UserScript==
+// ===== 脚本初始化确认 =====
+console.log("[JavDB增强] 脚本开始加载");
+window.addEventListener('error', function(e) {
+    console.error("[JavDB增强] 全局错误:", e.error);
+    alert("[JavDB增强] 脚本错误: " + e.error.message);
+});
+setTimeout(function() {
+    console.log("[JavDB增强] 脚本加载完成，config:", typeof config !== 'undefined' ? config : '未定义');
+}, 1000);
+// ===== 脚本初始化确认结束 =====
+
+
 (function() {
     'use strict';
     // ==================== 配置管理 ====================
@@ -521,6 +533,23 @@
     const JHS_ACTRESS_API_URL = "https://ja.wikipedia.org/wiki/";
     
     async function loadActressInfo() {
+        alert("[JavDB增强] loadActressInfo 启动\n\n检查页面元素...");
+        
+        // 检查各种选择器
+        const checks = {
+            '.actor-female': document.querySelectorAll('.actor-female').length,
+            'span[onmouseover*="star_"] a': document.querySelectorAll('span[onmouseover*="star_"] a').length,
+            'strong 包含演員': Array.from(document.querySelectorAll('strong')).filter(el => el.textContent.includes('演員')).length,
+            '.panel-block': document.querySelectorAll('.panel-block').length
+        };
+        
+        let checkResult = "[JavDB增强] DOM检查结果:\n\n";
+        for (const [selector, count] of Object.entries(checks)) {
+            checkResult += selector + ": " + count + "个\n";
+        }
+        alert(checkResult);
+        
+
         alert("[JavDB增强] loadActressInfo 函数已启动！\n\n请检查控制台查看详细日志");
         
         // 在页面右下角显示调试状态
