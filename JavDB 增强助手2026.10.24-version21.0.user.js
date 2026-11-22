@@ -2255,19 +2255,26 @@
             const code = extractDetailCode();
             if (!code) return;
             const dmmVideoMap = await getDmmVideo(code);
-            if (!dmmVideoMap) return;
+            if (!dmmVideoMap) {
+                // 🚀 修复：DMM 视频未找到时，恢复原始 data-url
+                const videoEl = pickJhsLiveVideo();
+                if (videoEl && videoEl.getAttribute('back-data-url')) {
+                    videoEl.setAttribute('data-url', videoEl.getAttribute('back-data-url'));
+                }
+                return;
+            }
             const defaultQuality = selectDefaultQuality(Object.keys(dmmVideoMap), config.videoQuality);
             const defaultVideoUrl = dmmVideoMap[defaultQuality];
             if (!defaultVideoUrl) return;
 
             // 【修复切换画质抓包看不到目标地址·根因】JavDB 详情页预告片播放器经 fancybox
             // 模态层打开时，DOM 中会同时存在多个 id="preview-video" 的节点（页面隐藏的原生
-            // 节点 + .fancybox-content 内真正在播的节点）。document.querySelector 永远返回
+            // 节点 + .fancybox__content 内真正在播的节点）。document.querySelector 永远返回
             // DOM 顺序靠前的第一个——即页面里那个看不见的隐藏节点。此前 enhancePreviewVideo、
             // 懒钩子、bindQualityButtons 全部用单查，换 src/load/play 都作用在隐藏节点上，
             // fancybox 内真正播放的元素始终停留在原生默认流——这就是"高亮变了、抓包里连
             // 720p(hmb.mp4) 请求都没有"的直接原因。现统一改用 pickJhsLiveVideo()：
-            // ①正在播放且有 src 的 → ②位于 .fancybox-content 内的 → ③已打开的 → ④第一个。
+            // ①正在播放且有 src 的 → ②位于 .fancybox__content 内的 → ③已打开的 → ④第一个。
             const videoEl = pickJhsLiveVideo();
             if (videoEl) {
                 // 【核心修复】画质切换正在进行 / 用户已手动选过画质时，绝不再写回默认源
@@ -2316,11 +2323,11 @@
                 videoEl._jhsDmmMap = dmmVideoMap;
                 // 播放器已可见时（用户在异步增强完成前就点开了预告片）：补挂/复用工具条。
                 // 【修复画质按钮点了没反应】关键根因：JavDB 原生详情页【没有】#preview-video，
-                // 点击"预告片"入口后 fancybox 会把隐藏的视频节点搬进 .fancybox-content 模态层，
+                // 点击"预告片"入口后 fancybox 会把隐藏的视频节点搬进 .fancybox__content 模态层，
                 // 而此前 bindQualityButtons 用 offsetParent===null 判断"可见"——被搬走的节点在
                 // fancybox 动画期间 offsetParent 为 null，工具条永远渲染不出来（或渲染在看不见的
                 // 原位置），表现就是"无法切换画质/按钮无反应"。现对齐 JAV-JHS：只要视频处于播放
-                // 状态即视为播放器已打开，并把工具条挂到视频所在容器（.fancybox-content）内。
+                // 状态即视为播放器已打开，并把工具条挂到视频所在容器（.fancybox__content）内。
                 if (wasVisible || !videoEl.paused) {
                     applyJhsMutedPreference(videoEl);
                     if (!videoEl.paused) playJhsVideoSafely(videoEl);
@@ -2455,7 +2462,14 @@
                     return;
                 }
                 const dmmVideoMap = await getDmmVideo(code);
-                if (!dmmVideoMap) return;
+                if (!dmmVideoMap) {
+                    // 🚀 修复：DMM 视频未找到时，恢复原始 data-url
+                    const videoEl = pickJhsLiveVideo();
+                    if (videoEl && videoEl.getAttribute('back-data-url')) {
+                        videoEl.setAttribute('data-url', videoEl.getAttribute('back-data-url'));
+                    }
+                    return;
+                }
                 // 异步解析期间 fancybox 可能已重建播放器节点，重新获取最新引用（对齐 JAV-JHS handleVideo 每次现查）
                 videoEl = pickJhsLiveVideo();
                 if (!videoEl) return;
@@ -2487,7 +2501,7 @@
     // 播放器打开后才渲染工具条。
     // 【修复画质按钮点了没反应】"已打开"的判定不再使用 offsetParent（JavDB 原生预告片经 fancybox
     // 把视频节点搬进模态层，动画期间 offsetParent 为 null，导致工具条永远不渲染）——对齐 JAV-JHS：
-    // 只要视频正在播放、或已位于 .fancybox-content 内、或正常可见，即视为播放器已打开。
+    // 只要视频正在播放、或已位于 .fancybox__content 内、或正常可见，即视为播放器已打开。
     // 【修复 AbortError: The play() request was interrupted by a new load request】
     // load() 会使上一次未完成的 play() Promise 以 AbortError 拒绝；此前各处
     // videoEl.play().catch(() => {}) 中 .catch() 的返回值被丢弃，部分 Chromium/Tampermonkey
@@ -2505,7 +2519,7 @@
         if (!videoEl) return false;
     
         // 在 fancybox 模态层内：模态层本身必须可见
-        const fancyboxContent = videoEl.closest && videoEl.closest('.fancybox-content');
+        const fancyboxContent = videoEl.closest && videoEl.closest('.fancybox__content');
         if (fancyboxContent) {
             const container = fancyboxContent.closest('.fancybox-container');
             if (container) {
@@ -2562,14 +2576,20 @@
 
     // 【修复切换画质抓包看不到目标地址·核心】收集所有 id="preview-video" 节点并选出
     // "真正在播的那一个"。JavDB 详情页经 fancybox 打开预告片后，DOM 中会同时存在页面里
-    // 隐藏的 #preview-video 与 .fancybox-content 内可见的两个同 id 节点；querySelector
+    // 隐藏的 #preview-video 与 .fancybox__content 内可见的两个同 id 节点；querySelector
     // 单查永远返回靠前的隐藏节点，导致换源/load/play 全部打在看不见的元素上（表现为
     // 高亮变了、实际播放的仍是原画质，抓包里连目标 hmb.mp4 请求都没有）。
     function pickJhsLiveVideo() {
+        // 🚀 修复：JavDB 页面改动，video 元素现在位于 #preview-video-box 内
+        const boxVideo = document.querySelector('#preview-video-box video');
+        if (boxVideo) {
+            if (!boxVideo.id) boxVideo.id = 'preview-video';
+        }
+        
         const list = Array.from(document.querySelectorAll('#preview-video'));
         if (!list.length) return null;
-        // 优先：在 .fancybox-content 内且可见的
-        const inFancybox = list.find(v => v.closest && v.closest('.fancybox-content') && v.offsetParent !== null);
+        // 优先：在 .fancybox__content 内且可见的
+        const inFancybox = list.find(v => v.closest && v.closest('.fancybox__content') && v.offsetParent !== null);
         if (inFancybox) return inFancybox;
         // 其次：正在播放的
         const playing = list.find(v => !v.paused && v.currentTime > 0);
@@ -2625,7 +2645,7 @@
     }
     
     /* 清除 Fancybox JS 动态写入的 top/left/transform，让 Flex 居中完美生效 */
-    .fancybox-slide--inline .fancybox-content {
+    .fancybox-slide--inline .fancybox__content {
         width: auto !important;
         height: auto !important;
         max-width: 95vw !important;
@@ -2643,8 +2663,8 @@
     }
     
     /* 视频本身撑满容器，限制最大高度，为底部工具条留出空间 */
-    .fancybox-slide--inline .fancybox-content #preview-video,
-    .fancybox-slide--inline .fancybox-content #jhs-preview-video {
+    .fancybox-slide--inline .fancybox__content #preview-video,
+    .fancybox-slide--inline .fancybox__content #jhs-preview-video {
         width: 100% !important;
         height: auto !important;
         max-width: 92vw !important;
@@ -2657,7 +2677,7 @@
     }
     
     /* 确保工具条在弹窗内也能完美居中且不被截断 */
-    .fancybox-slide--inline .fancybox-content #video-bottom-toolbar {
+    .fancybox-slide--inline .fancybox__content #video-bottom-toolbar {
         max-width: 92vw;
         margin: 10px auto 0;
         display: flex !important;
