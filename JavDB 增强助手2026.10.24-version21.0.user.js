@@ -1,7 +1,7 @@
 // ==UserScript==  
 // @name         JavDB 增强助手
 // @namespace    
-// @version      2026.10.24-version21.1
+// @version      2026.10.24-version21.2
 // @description  JavDB 全站增强：① 深度汉化——繁简转换 + 内置谷歌翻译引擎（防缓存污染/并发限流/风控重试/残料二次翻译/季集转换），覆盖标题、资讯与关联列表；② 预览升级——DMM/FANZA 高画质预告片解析与一键画质切换、详情页长缩略图、封面就地播放、悬浮大图、大屏居中播放器；③ 浏览体验——自动关闭年龄验证、自动关闭应用推广横幅、会员封面修复、原标题显示、主题自适应复制按钮、分页优化与跳页、毛玻璃搜索栏、链接新窗口、弹窗打开详情、域名自动重写、503 自动重试；④ 数据管理——评论与磁链增强、相关清单绕过 VIP、已下载标记与管理、本地/WebDAV 备份，全功能可开关
 // @author       admin
 // @include      https://javdb*.com/*  
@@ -523,18 +523,92 @@
     
     async function loadActressInfo() {
         if (!config.loadActressInfo) return;
-        if (!window.location.pathname.startsWith('/v/')) return;
         if (loadActressInfo._loaded) return;
-        
-        // 尝试多种选择器
+        if (document.querySelector('.actress-info')) { loadActressInfo._loaded = true; return; }
+
+        const path = window.location.pathname;
+        const isStarPage = path.startsWith('/actors/') || !!document.querySelector('.actor-section-name');
+        const isDetailPage = path.startsWith('/v/');
+        if (!isStarPage && !isDetailPage) return;
+
+        const cacheKey = 'jhs_actress_info_cache';
+        const cacheData = (() => {
+            try { return JSON.parse(localStorage.getItem(cacheKey)) || {}; }
+            catch (e) { return {}; }
+        })();
+        const saveCache = () => {
+            try { localStorage.setItem(cacheKey, JSON.stringify(cacheData)); } catch (e) {}
+        };
+
+        // 信息分三组展示：① 生日+年龄 ② 身高+体重 ③ 三围+罩杯
+        const buildTags = info => {
+            const birthday = (info.birthday || '').replace(/[（(]\s*\d+\s*[歳岁]\s*[）)]/g, '').trim();
+            const threeSize = (info.threeSize || '').replace(/\s*cm\s*/gi, 'cm').trim();
+            return [
+                [birthday, info.age],
+                [info.height, info.weight],
+                [threeSize, info.braSize]
+            ]
+                .map(group => group.filter(Boolean).join(' '))
+                .filter(Boolean)
+                .map(text => `<span class="jhs-info-tag">${text}</span>`)
+                .join('\n                            ');
+        };
+
+        // 依次尝试名字/别名，命中一个即可（维基百科词条可能只存在于某个名下）
+        const fetchFirstHit = async names => {
+            for (const name of names) {
+                if (!name) continue;
+                if (cacheData[name]) return cacheData[name];
+                try {
+                    const info = await fetchActressInfo(name);
+                    if (info) return info;
+                } catch (e) {
+                    console.warn(`[JavDB增强] 获取 ${name} 信息失败:`, e);
+                }
+            }
+            return null;
+        };
+
+        if (isStarPage) {
+            // ===== 演员详情页：在女优名标题下方追加信息（对齐 JAV-JHS handleStarPage）=====
+            const nameEl = document.querySelector('.actor-section-name');
+            if (!nameEl) return;
+            const names = [];
+            const pushNames = text => text.split(/[,，]/).forEach(n => {
+                n = n.trim();
+                if (n && !names.includes(n)) names.push(n);
+            });
+            pushNames(nameEl.textContent.trim());
+            // section-meta 里可能是别名；排除"共xx部影片"这类统计文字
+            document.querySelectorAll('.section-meta').forEach(el => {
+                const t = el.textContent.trim();
+                if (t && !t.includes('影片')) pushNames(t);
+            });
+            if (!names.length) return;
+            loadActressInfo._loaded = true;
+
+            const info = await fetchFirstHit(names);
+            if (info) names.forEach(n => { cacheData[n] = info; });
+            saveCache();
+
+            const html = info
+                ? `<a class="actress-info" href="${info.url}" target="_blank" style="display: block; font-weight: normal; margin-top: 5px;">${buildTags(info)}</a>`
+                : `<div class="actress-info" style="font-size: 14px; font-weight: normal; margin-top: 5px; color: #999;">暂无此演员信息</div>`;
+            nameEl.parentElement.insertAdjacentHTML('beforeend', html);
+            console.log(`[JavDB增强] 演员页信息加载${info ? '成功' : '失败（暂无信息）'}`);
+            return;
+        }
+
+        // ===== 影片详情页：在"演員"栏后插入每位女优的信息 =====
         let nameList = [];
-        
+
         // 选择器1: .actor-female
         const actors1 = document.querySelectorAll('.actor-female');
         if (actors1.length > 0) {
             nameList = Array.from(actors1).map(el => el.textContent.trim()).filter(n => n);
         }
-        
+
         // 选择器2: span[onmouseover*="star_"] a
         if (nameList.length === 0) {
             const actors2 = document.querySelectorAll('span[onmouseover*="star_"] a');
@@ -542,7 +616,7 @@
                 nameList = Array.from(actors2).map(el => el.textContent.trim()).filter(n => n);
             }
         }
-        
+
         // 选择器3: 包含"演員"的 strong 标签附近的链接
         if (nameList.length === 0) {
             const strongs = Array.from(document.querySelectorAll('strong'));
@@ -557,25 +631,18 @@
                 }
             }
         }
-        
+
         if (nameList.length === 0) {
             console.log("[JavDB增强] 未找到演员列表");
             return;
         }
-        
+
         loadActressInfo._loaded = true;
-        
-        const cacheKey = 'jhs_actress_info_cache';
-        const cacheData = (() => {
-            try { return JSON.parse(localStorage.getItem(cacheKey)) || {}; }
-            catch (e) { return {}; }
-        })();
-        
         let infoHtml = '';
-        
+
         for (const name of nameList) {
             if (!name) continue;
-            
+
             let info = cacheData[name];
             if (!info) {
                 try {
@@ -585,24 +652,26 @@
                     console.warn(`[JavDB增强] 获取 ${name} 信息失败:`, e);
                 }
             }
-            
+
             if (info) {
                 infoHtml += `
                     <div class="panel-block actress-info">
                         <strong style="margin-right: 5px;"><span style="user-select: all">${name}</span>: </strong>
                         <a href="${info.url}" style="margin-left: 5px" target="_blank">
-                            ${info.birthday ? `<span class="jhs-info-tag">${info.birthday}</span>` : ''}
-                            ${info.age ? `<span class="jhs-info-tag">${info.age}</span>` : ''}
-                            ${info.height ? `<span class="jhs-info-tag">${info.height}</span>` : ''}
-                            ${info.weight ? `<span class="jhs-info-tag">${info.weight}</span>` : ''}
-                            ${info.threeSize ? `<span class="jhs-info-tag">${info.threeSize}</span>` : ''}
-                            ${info.braSize ? `<span class="jhs-info-tag">${info.braSize}</span>` : ''}
+                            ${buildTags(info)}
                         </a>
+                    </div>
+                `;
+            } else {
+                infoHtml += `
+                    <div class="panel-block actress-info">
+                        <strong style="margin-right: 5px;"><span style="user-select: all">${name}</span>: </strong>
+                        <a href="${JHS_ACTRESS_API_URL + encodeURIComponent(name)}" style="margin-left: 5px" target="_blank">暂无此演员信息</a>
                     </div>
                 `;
             }
         }
-        
+
         if (infoHtml) {
             // 在"演員"标签后插入
             const strongs = Array.from(document.querySelectorAll('strong'));
@@ -615,8 +684,8 @@
                 }
             }
         }
-        
-        localStorage.setItem(cacheKey, JSON.stringify(cacheData));
+
+        saveCache();
     }
     
     async function fetchActressInfo(name) {
